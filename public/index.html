@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Active Hackneys — Callsign · Plate · Reg · Status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .sticky-top{position:sticky;top:0;z-index:40}
+    .touch{touch-action:manipulation}
+    .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    @keyframes rowFlash{0%{background:transparent}40%{background:rgba(250,204,21,.25)}100%{background:transparent}}
+    .flash{animation:rowFlash .6s ease-out}
+  </style>
+</head>
+<body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-50">
+  <!-- HEADER -->
+  <header class="sticky-top border-b border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 backdrop-blur">
+    <div class="max-w-5xl mx-auto px-3 py-2.5 flex items-center gap-2">
+      <div class="size-8 rounded-md bg-black text-yellow-400 grid place-items-center font-bold select-none">N</div>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-base sm:text-lg font-semibold leading-tight oneline">Active Hackney Drivers</h1>
+      </div>
+      <div class="flex items-center gap-1">
+        <button id="fontSm" class="touch px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 text-xs" title="Smaller text">A−</button>
+        <button id="fontLg" class="touch px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 text-xs" title="Larger text">A+</button>
+      </div>
+      <button id="refreshBtn" class="touch text-xs sm:text-sm px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800">
+        Refresh
+      </button>
+    </div>
+
+    <!-- Controls -->
+    <div class="max-w-5xl mx-auto px-3 pb-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="flex-1 min-w-[220px] flex items-center gap-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2.5">
+          <svg aria-hidden="true" class="size-4 text-neutral-500"><use href="#ico-search"/></svg>
+          <input id="searchInput" type="search" inputmode="search"
+                 placeholder="Search callsign, taxi plate or reg…"
+                 class="w-full bg-transparent py-1.5 text-[0.95rem] focus:outline-none" />
+        </div>
+
+        <select id="sortSelect"
+          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+          <option value="callsign">Sort: Callsign</option>
+          <option value="plateNumber">Sort: Plate</option>
+          <option value="registration">Sort: Registration</option>
+        </select>
+
+        <!-- Row highlight mode -->
+        <label class="text-xs text-neutral-600 dark:text-neutral-400 ml-auto">Row highlight</label>
+        <select id="hlSelect"
+          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+          <option value="none">None</option>
+          <option value="border">Border</option>
+          <option value="background">Background</option>
+        </select>
+      </div>
+
+      <!-- Column headers (sticky on mobile) -->
+      <div class="mt-2 sticky top-[60px] z-30">
+        <!-- Mobile: tight; status is a dot. sm+: shows 'Status' text -->
+        <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
+          <div>Callsign</div><div>Taxi Plate</div><div>Reg Plate</div>
+          <div class="text-right pr-1 sm:pr-0"><span class="sm:inline hidden">Status</span><span class="inline sm:hidden">●</span></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- LIST -->
+  <main class="max-w-5xl mx-auto px-2 sm:px-3 py-2.5">
+    <section class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+      <div id="rows"></div>
+      <div id="skeleton" class="divide-y divide-neutral-100 dark:divide-neutral-800">
+        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
+        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
+        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Icons -->
+  <svg width="0" height="0" class="hidden">
+    <symbol id="ico-search" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.471 6.471 0 0 0 1.57-5.34C15.53 5.59 13.21 3 10.26 3S5 5.59 5 8.39c0 2.8 2.32 5.39 5.26 5.39 1.61 0 3.06-.64 4.1-1.66l.27.28v.8l4.25 4.24c.41.41 1.07.41 1.48 0s.41-1.07 0-1.48L15.5 14Zm-5.24 0C8.02 14 6 11.97 6 9.39S8.02 4.78 10.26 4.78s4.26 2.02 4.26 4.61-2.02 4.61-4.26 4.61Z"/>
+    </symbol>
+  </svg>
+
+  <script>
+    // ===== Root font size (A− / A+) =====
+    const MIN_PX = 15, MAX_PX = 20, ROOT_KEY = "root-font-px";
+    const applyRootPx = (px) => document.documentElement.style.fontSize = px + "px";
+    let rootPx = Math.min(MAX_PX, Math.max(MIN_PX, Number(localStorage.getItem(ROOT_KEY) || 16)));
+    applyRootPx(rootPx);
+    document.getElementById("fontSm").addEventListener("click", () => { rootPx = Math.max(MIN_PX, rootPx - 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); });
+    document.getElementById("fontLg").addEventListener("click", () => { rootPx = Math.min(MAX_PX, rootPx + 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); });
+
+    // ===== CONFIG =====
+    const API_VEHICLES = "/api/vehicles";
+    const ONLINE_URL   = "/api/status";
+    const SSE_URL      = "/api/status/stream";
+    const VEHICLE_REFRESH_MS = 60000;
+    const STATUS_REFRESH_MS  = 5000;
+    const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
+
+    // ===== HIGHLIGHT MODE (persist) =====
+    const HL_KEY = "row-highlight-mode"; // 'none' | 'border' | 'background'
+    const hlSelect = document.getElementById("hlSelect");
+    let highlightMode = localStorage.getItem(HL_KEY) || "background";
+    hlSelect.value = highlightMode;
+    hlSelect.addEventListener("change", () => {
+      highlightMode = hlSelect.value;
+      localStorage.setItem(HL_KEY, highlightMode);
+      render(); // re-render with new mode
+    });
+
+    // ===== HELPERS =====
+    const getList = (data) => Array.isArray(data) ? data : (data?.items || data?.results || data?.vehicles || data?.data || []);
+    const getCallsign = (v) => v?.callsign ?? v?.callSign ?? v?.code ?? v?.mdtId ?? v?.mdtID ?? "";
+    const getPlate    = (v) => v?.plateNumber ?? v?.plate ?? v?.registrationNumber ?? "";
+    const getReg      = (v) => v?.registration ?? v?.vrm ?? v?.reg ?? "";
+    const normKey     = (s) => String(s || "").trim().toUpperCase();
+    const toNum       = (s) => { const n = Number(String(s).trim()); return Number.isFinite(n) ? n : null; };
+
+    const isActive = (v) => {
+      if (typeof v?.isActive === "boolean") return v.isActive;
+      if (typeof v?.active === "boolean") return v.active;
+      if (typeof v?.isArchived === "boolean") return !v.isArchived;
+      if (typeof v?.archived === "boolean") return !v.archived;
+      return true;
+    };
+    const hasHackneyCapability = (v) => {
+      if (SHOW_ALL) return true;
+      if (Array.isArray(v?.capabilityIds)) return v.capabilityIds.includes(14);
+      if (Array.isArray(v?.capabilities)) {
+        return v.capabilities.some(c => {
+          if (typeof c === "number") return c === 14;
+          if (typeof c === "string") return c === "14" || c.toLowerCase().includes("hackney");
+          if (c && typeof c === "object") return c.id === 14 || (c.name && String(c.name).toLowerCase().includes("hackney"));
+          return false;
+        });
+      }
+      if (typeof v?.capability === "number") return v.capability === 14;
+      if (typeof v?.capability === "string") return v.capibility?.toLowerCase?.().includes("hackney") || v.capability === "14";
+      return false;
+    };
+    const compare = (a, b, field) => {
+      const A = String(field(a) ?? ""); const B = String(field(b) ?? "");
+      const na = toNum(A), nb = toNum(B);
+      if (na !== null && nb !== null) return na - nb;
+      return A.localeCompare(B, undefined, { numeric: true, sensitivity: "base" });
+    };
+
+    // ===== ELEMENTS / STATE =====
+    const rowsEl     = document.getElementById("rows");
+    const skeletonEl = document.getElementById("skeleton");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const searchEl   = document.getElementById("searchInput");
+    const sortEl     = document.getElementById("sortSelect");
+
+    let baseMaster = [];
+    let master = [];
+    let onlineMap = new Map();
+    let statusPollTimer = null;
+
+    // ===== STATUS helpers =====
+    function inferOnline(obj) {
+      if (typeof obj?.online === "boolean") return obj.online;
+      const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
+      if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
+      if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
+      const sub = (obj?.SubEventType ?? obj?.subEventType ?? "").toString().toLowerCase();
+      if (sub === "started") return true;
+      if (sub === "ended") return false;
+      return null;
+    }
+    function extractCallsign(obj) {
+      const direct = obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ?? obj?.vehicleCode ?? obj?.driverCode ?? null;
+      if (direct) return direct;
+      const d = obj?.Driver || obj?.driver || {};
+      const v = obj?.Vehicle || obj?.vehicle || {};
+      return d?.Callsign ?? d?.callsign ?? d?.callSign ?? v?.Callsign ?? v?.callsign ?? v?.callSign ?? null;
+    }
+    function buildOnlineMap(data) {
+      const list = getList(data);
+      const map = new Map();
+      for (const item of list) {
+        const cs = extractCallsign(item);
+        if (!cs) continue;
+        const online = inferOnline(item);
+        if (online === null) continue;
+        map.set(normKey(cs), {
+          online,
+          updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null
+        });
+      }
+      return map;
+    }
+    const onlineFor = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+
+    // ===== BADGE (mobile: dot; desktop: pill) =====
+    function badge(on) {
+      const dot =
+        on === true  ? 'bg-green-600'
+      : on === false ? 'bg-red-600'
+      :                'bg-neutral-400';
+      const label =
+        on === true  ? 'ONLINE'
+      : on === false ? 'OFFLINE'
+      :                '—';
+      return `
+        <span class="inline-flex items-center gap-1 sm:gap-1.5">
+          <span class="size-2.5 rounded-full ${dot}" aria-hidden="true"></span>
+          <span class="hidden sm:inline text-xs px-2 py-0.5 rounded-md
+                       ${on===true ? 'bg-green-600 text-white' : on===false ? 'bg-red-600 text-white' : 'bg-neutral-400 text-white'}">
+            ${label}
+          </span>
+        </span>
+      `;
+    }
+
+    // ===== ROW classes based on highlight mode & status =====
+    function rowChrome(on){
+      // Background tint
+      if (highlightMode === "background") {
+        if (on === true)  return "bg-green-50 dark:bg-green-950/30";
+        if (on === false) return "bg-red-50 dark:bg-red-950/30";
+        return "bg-neutral-50/40 dark:bg-neutral-900";
+      }
+      // Border (left rail)
+      if (highlightMode === "border") {
+        const bar = on === true ? "before:bg-green-600"
+                 : on === false ? "before:bg-red-600"
+                 : "before:bg-neutral-400";
+        return `before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${bar}`;
+      }
+      // None
+      return "";
+    }
+
+    // ===== ROW =====
+    function rowHTML(v, highlight=false) {
+      const cs   = getCallsign(v) || "";
+      const plat = getPlate(v)    || "—";
+      const reg  = getReg(v)      || "—";
+      const on   = onlineFor(cs);
+
+      return `
+        <div id="row-${normKey(cs)}"
+             class="relative grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] items-center gap-x-1 sm:gap-x-1.5 gap-y-0 px-3 sm:px-4 py-2.5 border-b last:border-b-0 border-neutral-100 dark:border-neutral-800 ${rowChrome(on)} ${highlight ? 'flash' : ''}">
+          <div class="mono font-semibold text-[0.98rem] oneline">${cs || '(no)'}</div>
+          <div class="oneline">
+            <span class="mono inline-block text-[0.95rem] px-2 py-0.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">${plat}</span>
+          </div>
+          <div class="oneline">
+            <span class="mono inline-block font-semibold text-[0.95rem] px-2 py-0.5 rounded-md bg-yellow-400 text-black border border-yellow-500">${reg}</span>
+          </div>
+          <div class="justify-self-end pr-0 sm:pr-0" title="${on===true?'Online':on===false?'Offline':'Unknown'}" aria-label="Status">
+            ${badge(on)}
+          </div>
+        </div>
+      `;
+    }
+
+    function render(changedKey=null) {
+      if (!master.length) {
+        rowsEl.innerHTML = `<div class="p-4 text-sm text-neutral-600 dark:text-neutral-300">No vehicles to display.</div>`;
+        skeletonEl.classList.add("hidden");
+        return;
+      }
+      const html = master.map(v => {
+        const cs = getCallsign(v);
+        const hi = changedKey && normKey(cs) === changedKey;
+        return rowHTML(v, hi);
+      }).join("");
+      rowsEl.innerHTML = html;
+      skeletonEl.classList.add("hidden");
+    }
+
+    // ===== FILTER / SORT / SEARCH =====
+    let searchTimer = null;
+    function applyFiltersAndRender(changedKey=null){
+      const q = searchEl.value.trim().toLowerCase();
+      let arr = baseMaster;
+
+      if (q) {
+        arr = arr.filter(v => {
+          const cs = String(getCallsign(v)).toLowerCase();
+          const plate = String(getPlate(v)).toLowerCase();
+          const reg = String(getReg(v)).toLowerCase();
+          return cs.includes(q) || plate.includes(q) || reg.includes(q);
+        });
+      }
+      const mode = sortEl.value;
+      if (mode === "plateNumber") arr.sort((a,b) => compare(a,b,getPlate));
+      else if (mode === "registration") arr.sort((a,b) => compare(a,b,getReg));
+      else arr.sort((a,b) => compare(a,b,getCallsign));
+
+      master = arr;
+      render(changedKey);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => { fetchVehicles(); fetchOnline(); });
+    searchEl.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => applyFiltersAndRender(), 120);
+    });
+    sortEl.addEventListener("change", () => applyFiltersAndRender());
+
+    // ===== DATA LOADERS =====
+    async function fetchVehicles() {
+      try {
+        skeletonEl.classList.remove("hidden");
+        const res = await fetch(API_VEHICLES, { headers: { "Cache-Control": "no-cache" }});
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        const data = await res.json();
+        const list = getList(data);
+        baseMaster = list
+          .filter(v => isActive(v) && hasHackneyCapability(v))
+          .map(v => ({
+            ...v,
+            callsign: getCallsign(v),
+            plateNumber: getPlate(v),
+            registration: getReg(v),
+          }))
+          .filter(v => v.callsign || v.plateNumber || v.registration);
+        applyFiltersAndRender();
+      } catch (e) {
+        skeletonEl.classList.add("hidden");
+        rowsEl.innerHTML = `<div class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load vehicles: ${e.message}</div>`;
+      }
+    }
+
+    async function fetchOnline() {
+      try {
+        const res = await fetch(ONLINE_URL, { headers: { "Cache-Control":"no-cache" }});
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        const data = await res.json();
+        onlineMap = buildOnlineMap(data);
+        render();
+      } catch (e) { /* ignore; SSE may cover it */ }
+    }
+
+    // ===== LIVE UPDATES (SSE + fallback) =====
+    function wireSSE() {
+      if (!("EventSource" in window)) return false;
+      try {
+        const es = new EventSource(SSE_URL);
+        es.addEventListener("snapshot", (evt) => {
+          try {
+            const payload = JSON.parse(evt.data);
+            const m = new Map();
+            for (const item of (payload?.data || [])) {
+              m.set(normKey(item.callsign), { online: !!item.online, updatedAt: item.updatedAt || null });
+            }
+            onlineMap = m;
+            render();
+          } catch {}
+        });
+        es.addEventListener("status", (evt) => {
+          try {
+            const p = JSON.parse(evt.data);
+            if (!p?.callsign) return;
+            const key = normKey(p.callsign);
+            const prev = onlineMap.get(key)?.online;
+            onlineMap.set(key, { online: !!p.online, updatedAt: p.updatedAt || null });
+            render(prev !== p.online ? key : null);
+          } catch {}
+        });
+        return true;
+      } catch { return false; }
+    }
+
+    function startPollingFallback() {
+      clearInterval(statusPollTimer);
+      statusPollTimer = setInterval(fetchOnline, STATUS_REFRESH_MS);
+    }
+
+    // ===== INIT =====
+    setInterval(fetchVehicles, VEHICLE_REFRESH_MS);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchOnline(); });
+
+    (async () => {
+      await fetchVehicles();
+      const ok = wireSSE();
+      if (!ok) startPollingFallback(); else fetchOnline();
+    })();
+  </script>
+</body>
+</html>
