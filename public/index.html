@@ -36,6 +36,7 @@
     <!-- Controls -->
     <div class="max-w-5xl mx-auto px-3 pb-2">
       <div class="flex flex-wrap items-center gap-2">
+        <!-- Search -->
         <div class="flex-1 min-w-[220px] flex items-center gap-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2.5">
           <svg aria-hidden="true" class="size-4 text-neutral-500"><use href="#ico-search"/></svg>
           <input id="searchInput" type="search" inputmode="search"
@@ -43,6 +44,15 @@
                  class="w-full bg-transparent py-1.5 text-[0.95rem] focus:outline-none" />
         </div>
 
+        <!-- Filter by Status -->
+        <select id="statusFilter"
+          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+          <option value="all">Show: All</option>
+          <option value="online">Online only</option>
+          <option value="offline">Offline only</option>
+        </select>
+
+        <!-- Sort -->
         <select id="sortSelect"
           class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
           <option value="callsign">Sort: Callsign</option>
@@ -59,6 +69,9 @@
           <option value="background" selected>Background</option>
         </select>
       </div>
+
+      <!-- Status counters -->
+      <div id="statusCounts" class="mt-1 text-xs sm:text-sm text-neutral-600 dark:text-neutral-400"></div>
 
       <!-- Column headers (sticky under dynamic header) -->
       <div id="colHeader" class="mt-2 sticky z-30">
@@ -179,6 +192,8 @@
     const refreshBtn = document.getElementById("refreshBtn");
     const searchEl   = document.getElementById("searchInput");
     const sortEl     = document.getElementById("sortSelect");
+    const statusFilterEl = document.getElementById("statusFilter");
+    const statusCountsEl = document.getElementById("statusCounts");
 
     let baseMaster = [];
     let master = [];
@@ -249,7 +264,7 @@
       `;
     }
 
-    // ===== ROW classes based on highlight mode & status =====
+    // ===== ROW classes =====
     function rowChrome(on){
       if (highlightMode === "background") {
         if (on === true)  return "bg-green-50 dark:bg-green-950/30";
@@ -319,12 +334,39 @@
           return cs.includes(q) || plate.includes(q) || reg.includes(q);
         });
       }
+
+      // Filter by Online/Offline
+      const filterMode = statusFilterEl.value;
+      if (filterMode !== "all") {
+        arr = arr.filter(v => {
+          const on = onlineFor(getCallsign(v));
+          if (filterMode === "online") return on === true;
+          if (filterMode === "offline") return on === false;
+          return true;
+        });
+      }
+
+      // Sort
       const mode = sortEl.value;
       if (mode === "plateNumber") arr.sort((a,b) => compare(a,b,getPlate));
       else if (mode === "registration") arr.sort((a,b) => compare(a,b,getReg));
       else arr.sort((a,b) => compare(a,b,getCallsign));
 
       master = arr;
+
+      // Update live counters (counts are global, not filtered)
+      let onlineCount = 0, offlineCount = 0;
+      for (const [, val] of onlineMap.entries()) {
+        if (val.online === true) onlineCount++;
+        else if (val.online === false) offlineCount++;
+      }
+      const total = onlineCount + offlineCount;
+      statusCountsEl.innerHTML = `
+        🟢 Online: <b>${onlineCount}</b>&nbsp;&nbsp;
+        🔴 Offline: <b>${offlineCount}</b>&nbsp;&nbsp;
+        ⚪ Total: <b>${total}</b>
+      `;
+
       render(changedKey);
     }
 
@@ -334,6 +376,7 @@
       searchTimer = setTimeout(() => applyFiltersAndRender(), 120);
     });
     sortEl.addEventListener("change", () => applyFiltersAndRender());
+    statusFilterEl.addEventListener("change", () => applyFiltersAndRender());
 
     // ===== DATA LOADERS =====
     async function fetchVehicles() {
@@ -365,7 +408,7 @@
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         const data = await res.json();
         onlineMap = buildOnlineMap(data);
-        render();
+        applyFiltersAndRender(); // ensure counters update too
       } catch (e) { /* ignore; SSE may cover it */ }
     }
 
@@ -387,7 +430,7 @@
               m.set(normKey(item.callsign), { online: !!item.online, updatedAt: item.updatedAt || null });
             }
             onlineMap = m;
-            render();
+            applyFiltersAndRender();
           } catch {}
         });
 
@@ -398,7 +441,7 @@
             const key = normKey(p.callsign);
             const prev = onlineMap.get(key)?.online;
             onlineMap.set(key, { online: !!p.online, updatedAt: p.updatedAt || null });
-            render(prev !== p.online ? key : null);
+            applyFiltersAndRender(prev !== p.online ? key : null);
           } catch {}
         });
 
