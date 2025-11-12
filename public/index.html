@@ -13,11 +13,12 @@
     .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     @keyframes rowFlash{0%{background:transparent}40%{background:rgba(250,204,21,.25)}100%{background:transparent}}
     .flash{animation:rowFlash .6s ease-out}
+    @media (prefers-reduced-motion: reduce){ .flash { animation: none !important; } }
   </style>
 </head>
 <body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-50">
   <!-- HEADER -->
-  <header class="sticky-top border-b border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 backdrop-blur">
+  <header id="appHeader" class="sticky-top border-b border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 backdrop-blur">
     <div class="max-w-5xl mx-auto px-3 py-2.5 flex items-center gap-2">
       <div class="size-8 rounded-md bg-black text-yellow-400 grid place-items-center font-bold select-none">N</div>
       <div class="flex-1 min-w-0">
@@ -55,12 +56,12 @@
           class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
           <option value="none">None</option>
           <option value="border">Border</option>
-          <option value="background">Background</option>
+          <option value="background" selected>Background</option>
         </select>
       </div>
 
-      <!-- Column headers (sticky on mobile) -->
-      <div class="mt-2 sticky top-[60px] z-30">
+      <!-- Column headers (sticky under dynamic header) -->
+      <div id="colHeader" class="mt-2 sticky z-30">
         <!-- Mobile: tight; status is a dot. sm+: shows 'Status' text -->
         <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
           <div>Callsign</div><div>Taxi Plate</div><div>Reg Plate</div>
@@ -73,7 +74,7 @@
   <!-- LIST -->
   <main class="max-w-5xl mx-auto px-2 sm:px-3 py-2.5">
     <section class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
-      <div id="rows"></div>
+      <div id="rows" aria-live="polite"></div>
       <div id="skeleton" class="divide-y divide-neutral-100 dark:divide-neutral-800">
         <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
         <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
@@ -95,8 +96,17 @@
     const applyRootPx = (px) => document.documentElement.style.fontSize = px + "px";
     let rootPx = Math.min(MAX_PX, Math.max(MIN_PX, Number(localStorage.getItem(ROOT_KEY) || 16)));
     applyRootPx(rootPx);
-    document.getElementById("fontSm").addEventListener("click", () => { rootPx = Math.max(MIN_PX, rootPx - 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); });
-    document.getElementById("fontLg").addEventListener("click", () => { rootPx = Math.min(MAX_PX, rootPx + 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); });
+    document.getElementById("fontSm").addEventListener("click", () => { rootPx = Math.max(MIN_PX, rootPx - 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); adjustStickyOffset(); });
+    document.getElementById("fontLg").addEventListener("click", () => { rootPx = Math.min(MAX_PX, rootPx + 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); adjustStickyOffset(); });
+
+    // ===== Dynamic sticky offset for column headers =====
+    function adjustStickyOffset(){
+      const h = document.getElementById("appHeader")?.offsetHeight || 60;
+      const ch = document.getElementById("colHeader");
+      if (ch) ch.style.top = `${h}px`;
+    }
+    window.addEventListener("resize", adjustStickyOffset);
+    document.addEventListener("DOMContentLoaded", adjustStickyOffset);
 
     // ===== CONFIG =====
     const API_VEHICLES = "/api/vehicles";
@@ -105,6 +115,14 @@
     const VEHICLE_REFRESH_MS = 60000;
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
+
+    // ===== STALENESS (show last-known after restart) =====
+    const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
+    function isStale(updatedAt){
+      if (!updatedAt) return true;
+      const t = new Date(updatedAt).getTime();
+      return !Number.isFinite(t) || (Date.now() - t) > STALE_MS;
+    }
 
     // ===== HIGHLIGHT MODE (persist) =====
     const HL_KEY = "row-highlight-mode"; // 'none' | 'border' | 'background'
@@ -132,6 +150,7 @@
       if (typeof v?.archived === "boolean") return !v.archived;
       return true;
     };
+
     const hasHackneyCapability = (v) => {
       if (SHOW_ALL) return true;
       if (Array.isArray(v?.capabilityIds)) return v.capabilityIds.includes(14);
@@ -144,9 +163,10 @@
         });
       }
       if (typeof v?.capability === "number") return v.capability === 14;
-      if (typeof v?.capability === "string") return v.capibility?.toLowerCase?.().includes("hackney") || v.capability === "14";
+      if (typeof v?.capability === "string") return v.capability?.toLowerCase?.().includes("hackney") || v.capability === "14"; // <- fixed typo
       return false;
     };
+
     const compare = (a, b, field) => {
       const A = String(field(a) ?? ""); const B = String(field(b) ?? "");
       const na = toNum(A), nb = toNum(B);
@@ -199,23 +219,31 @@
       }
       return map;
     }
-    const onlineFor = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const onlineFor  = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const updatedFor = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
 
-    // ===== BADGE (mobile: dot; desktop: pill) =====
-    function badge(on) {
+    // ===== BADGE (with staleness) =====
+    function badge(on, updatedAt) {
+      const stale = isStale(updatedAt);
       const dot =
-        on === true  ? 'bg-green-600'
-      : on === false ? 'bg-red-600'
-      :                'bg-neutral-400';
+        on === true  ? (stale ? 'bg-amber-500' : 'bg-green-600') :
+        on === false ? (stale ? 'bg-amber-500' : 'bg-red-600') :
+                       'bg-neutral-400';
       const label =
-        on === true  ? 'ONLINE'
-      : on === false ? 'OFFLINE'
-      :                '—';
+        on === true  ? (stale ? 'STALE ONLINE'  : 'ONLINE') :
+        on === false ? (stale ? 'STALE OFFLINE' : 'OFFLINE') :
+                       '—';
+      const pill =
+        on === null ? 'bg-neutral-400 text-white' :
+        stale       ? 'bg-amber-500 text-black' :
+        on ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
+      const tt = updatedAt
+        ? `Last update: ${new Date(updatedAt).toLocaleString()}`
+        : 'No timestamp';
       return `
-        <span class="inline-flex items-center gap-1 sm:gap-1.5">
+        <span class="inline-flex items-center gap-1 sm:gap-1.5" title="${tt}">
           <span class="size-2.5 rounded-full ${dot}" aria-hidden="true"></span>
-          <span class="hidden sm:inline text-xs px-2 py-0.5 rounded-md
-                       ${on===true ? 'bg-green-600 text-white' : on===false ? 'bg-red-600 text-white' : 'bg-neutral-400 text-white'}">
+          <span class="hidden sm:inline text-xs px-2 py-0.5 rounded-md ${pill}">
             ${label}
           </span>
         </span>
@@ -247,6 +275,7 @@
       const plat = getPlate(v)    || "—";
       const reg  = getReg(v)      || "—";
       const on   = onlineFor(cs);
+      const ts   = updatedFor(cs);
 
       return `
         <div id="row-${normKey(cs)}"
@@ -258,8 +287,8 @@
           <div class="oneline">
             <span class="mono inline-block font-semibold text-[0.95rem] px-2 py-0.5 rounded-md bg-yellow-400 text-black border border-yellow-500">${reg}</span>
           </div>
-          <div class="justify-self-end pr-0 sm:pr-0" title="${on===true?'Online':on===false?'Offline':'Unknown'}" aria-label="Status">
-            ${badge(on)}
+          <div class="justify-self-end pr-0 sm:pr-0" aria-label="Status">
+            ${badge(on, ts)}
           </div>
         </div>
       `;
@@ -349,6 +378,12 @@
       if (!("EventSource" in window)) return false;
       try {
         const es = new EventSource(SSE_URL);
+        es.addEventListener("open", () => { /* connected */ });
+        es.addEventListener("error", () => {
+          // fall back to polling if we get repeated errors
+          if (!document.hidden) startPollingFallback();
+        });
+
         es.addEventListener("snapshot", (evt) => {
           try {
             const payload = JSON.parse(evt.data);
@@ -360,6 +395,7 @@
             render();
           } catch {}
         });
+
         es.addEventListener("status", (evt) => {
           try {
             const p = JSON.parse(evt.data);
@@ -370,6 +406,7 @@
             render(prev !== p.online ? key : null);
           } catch {}
         });
+
         return true;
       } catch { return false; }
     }
@@ -387,6 +424,7 @@
       await fetchVehicles();
       const ok = wireSSE();
       if (!ok) startPollingFallback(); else fetchOnline();
+      adjustStickyOffset();
     })();
   </script>
 </body>
