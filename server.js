@@ -4,18 +4,23 @@ import cors from "cors";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const AUTOCAB_KEY = process.env.AUTOCAB_KEY || "";
 const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN || "";
-const STATUS_FILE = process.env.STATUS_FILE || "./status.json"; // <- persistent if you mount /data
+const STATUS_FILE = process.env.STATUS_FILE || "./status.json"; // set to /data/status.json on Render for persistence
 
 // --- Middleware
 app.set("trust proxy", 1);
-app.use(cors()); // or lock to your domain(s) if you want stricter CORS
+app.use(cors()); // tighten if you want: cors({ origin: ["https://hackney.needacabapis.co.uk"] })
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -44,7 +49,6 @@ function saveStatusToDisk() {
     try {
       const arr = Array.from(onlineMap.entries());
       fs.writeFileSync(STATUS_FILE, JSON.stringify(arr), "utf8");
-      // console.log(`Saved ${arr.length} status records to ${STATUS_FILE}.`);
     } catch (e) {
       console.warn("Could not save status file:", e.message);
     }
@@ -56,13 +60,11 @@ const normKey = (s) => String(s || "").trim().toUpperCase();
 
 // --- Extractors / inference --------------------------------
 function extractCallsign(obj) {
-  // Top-level first
   const direct =
     obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ??
     obj?.vehicleCode ?? obj?.driverCode ?? null;
   if (direct) return direct;
 
-  // Common nested spots (Autocab ShiftChange style)
   const d = obj?.Driver || obj?.driver || {};
   const v = obj?.Vehicle || obj?.vehicle || {};
   return (
@@ -72,27 +74,22 @@ function extractCallsign(obj) {
 }
 
 function inferOnline(obj) {
-  // Explicit boolean
   if (typeof obj?.online === "boolean") return obj.online;
 
-  // Generic string fields
   const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "")
     .toString()
     .toLowerCase();
   if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
   if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
 
-  // Autocab style: SubEventType: "Started" | "Ended"
   const sub = (obj?.SubEventType ?? obj?.subEventType ?? "")
     .toString().toLowerCase();
   if (sub === "started") return true;
   if (sub === "ended") return false;
 
-  // Presence of StartedDate / EndedDate (heuristic)
   if (obj?.StartedDate && !obj?.EndedDate) return true;
   if (obj?.EndedDate && !obj?.StartedDate) return false;
 
-  // Nested Driver/Vehicle shift hints (future-proof)
   const d = obj?.Driver || obj?.driver || {};
   const v = obj?.Vehicle || obj?.vehicle || {};
   const dShift = (d?.ShiftStatus ?? d?.status ?? "").toString().toLowerCase();
@@ -116,6 +113,9 @@ function coercePayloadToArray(body) {
   if (b == null || b === "") return [];
   return [b];
 }
+
+// --- Static FIRST (serve the UI) ----------------------------
+app.use(express.static(path.join(__dirname, "public")));
 
 // --- SSE wiring for instant pushes to browser ---------------
 let sseClients = new Set();
@@ -154,7 +154,6 @@ function sseBroadcast(event, payload) {
 // --- Webhook receiver ---------------------------------------
 app.post("/webhook/ShiftChange", (req, res) => {
   try {
-    // Optional shared secret
     if (WEBHOOK_TOKEN) {
       const provided = req.headers["x-webhook-token"];
       if (provided !== WEBHOOK_TOKEN) {
@@ -192,7 +191,6 @@ app.post("/webhook/ShiftChange", (req, res) => {
       onlineMap.set(normKey(cs), rec);
       updates++;
 
-      // Log + push to connected browsers immediately
       console.log(`Status set: callsign ${cs} -> ${online ? "ONLINE" : "OFFLINE"} @ ${rec.updatedAt}`);
       sseBroadcast("status", { callsign: normKey(cs), ...rec });
     }
@@ -243,12 +241,11 @@ app.get("/api/vehicles", async (_req, res) => {
   }
 });
 
-// --- Health / root ------------------------------------------
+// --- Health & Root ------------------------------------------
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.type("text").send("OK"));
-
-// --- Static --------------------------------------------------
-app.use(express.static("public"));
+app.get("/", (_req, res) =>
+  res.sendFile(path.join(__dirname, "public", "index.html"))
+);
 
 // --- Graceful shutdown --------------------------------------
 process.on("SIGTERM", () => { try { saveStatusToDisk(); } finally { process.exit(0); } });
