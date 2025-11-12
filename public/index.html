@@ -354,13 +354,11 @@
 
       master = arr;
 
-      // Update live counters (counts are global, not filtered)
-      let onlineCount = 0, offlineCount = 0;
-      for (const [, val] of onlineMap.entries()) {
-        if (val.online === true) onlineCount++;
-        else if (val.online === false) offlineCount++;
-      }
-      const total = onlineCount + offlineCount;
+      // Update live counters — based on the displayed rows only
+      const onlineCount  = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === true  ? 1 : 0), 0);
+      const offlineCount = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === false ? 1 : 0), 0);
+      const total = arr.length;
+
       statusCountsEl.innerHTML = `
         🟢 Online: <b>${onlineCount}</b>&nbsp;&nbsp;
         🔴 Offline: <b>${offlineCount}</b>&nbsp;&nbsp;
@@ -386,15 +384,32 @@
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         const data = await res.json();
         const list = getList(data);
-        baseMaster = list
-          .filter(v => isActive(v) && hasHackneyCapability(v))
-          .map(v => ({
+
+        // Build a deduped list by normalized callsign (fallback to reg/plate)
+        const seen = new Map();
+        for (const v of list) {
+          if (!isActive(v) || !hasHackneyCapability(v)) continue;
+
+          const obj = {
             ...v,
             callsign: getCallsign(v),
             plateNumber: getPlate(v),
             registration: getReg(v),
-          }))
-          .filter(v => v.callsign || v.plateNumber || v.registration);
+          };
+
+          if (!(obj.callsign || obj.plateNumber || obj.registration)) continue;
+
+          const key = normKey(obj.callsign || obj.registration || obj.plateNumber);
+          if (!seen.has(key)) {
+            seen.set(key, obj);
+          } else {
+            // Prefer entries that have a callsign if duplicate
+            const prev = seen.get(key);
+            if (!prev.callsign && obj.callsign) seen.set(key, obj);
+          }
+        }
+
+        baseMaster = Array.from(seen.values());
         applyFiltersAndRender();
       } catch (e) {
         skeletonEl.classList.add("hidden");
@@ -408,7 +423,7 @@
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         const data = await res.json();
         onlineMap = buildOnlineMap(data);
-        applyFiltersAndRender(); // ensure counters update too
+        applyFiltersAndRender(); // ensures counters update too
       } catch (e) { /* ignore; SSE may cover it */ }
     }
 
