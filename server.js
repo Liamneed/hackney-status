@@ -20,7 +20,7 @@ app.use(express.urlencoded({ extended: true }));
 let onlineMap = new Map();
 
 // --- Optional: persist to disk
-const STATUS_FILE = "./status.json";
+const STATUS_FILE = process.env.STATUS_FILE || "./status.json";
 function loadStatusFromDisk() {
   try {
     if (fs.existsSync(STATUS_FILE)) {
@@ -214,6 +214,9 @@ app.get("/api/vehicles", async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+process.on("SIGTERM", () => { try { saveStatusToDisk(); } finally { process.exit(0); } });
+process.on("SIGINT",  () => { try { saveStatusToDisk(); } finally { process.exit(0); } });
 
 // --- Health
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
