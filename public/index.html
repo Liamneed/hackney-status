@@ -62,7 +62,6 @@
 
       <!-- Column headers (sticky under dynamic header) -->
       <div id="colHeader" class="mt-2 sticky z-30">
-        <!-- Mobile: tight; status is a dot. sm+: shows 'Status' text -->
         <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
           <div>Callsign</div><div>Taxi Plate</div><div>Reg Plate</div>
           <div class="text-right pr-1 sm:pr-0"><span class="sm:inline hidden">Status</span><span class="inline sm:hidden">●</span></div>
@@ -163,7 +162,7 @@
         });
       }
       if (typeof v?.capability === "number") return v.capability === 14;
-      if (typeof v?.capability === "string") return v.capability?.toLowerCase?.().includes("hackney") || v.capability === "14"; // <- fixed typo
+      if (typeof v?.capability === "string") return v.capability?.toLowerCase?.().includes("hackney") || v.capability === "14";
       return false;
     };
 
@@ -252,20 +251,17 @@
 
     // ===== ROW classes based on highlight mode & status =====
     function rowChrome(on){
-      // Background tint
       if (highlightMode === "background") {
         if (on === true)  return "bg-green-50 dark:bg-green-950/30";
         if (on === false) return "bg-red-50 dark:bg-red-950/30";
         return "bg-neutral-50/40 dark:bg-neutral-900";
       }
-      // Border (left rail)
       if (highlightMode === "border") {
         const bar = on === true ? "before:bg-green-600"
                  : on === false ? "before:bg-red-600"
                  : "before:bg-neutral-400";
         return `before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${bar}`;
       }
-      // None
       return "";
     }
 
@@ -380,7 +376,6 @@
         const es = new EventSource(SSE_URL);
         es.addEventListener("open", () => { /* connected */ });
         es.addEventListener("error", () => {
-          // fall back to polling if we get repeated errors
           if (!document.hidden) startPollingFallback();
         });
 
