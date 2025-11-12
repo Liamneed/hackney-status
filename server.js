@@ -16,18 +16,19 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const AUTOCAB_KEY = process.env.AUTOCAB_KEY || "";
 const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN || "";
-const STATUS_FILE = process.env.STATUS_FILE || "./status.json"; // set to /data/status.json on Render for persistence
+// Use a persistent disk on Render, e.g. set STATUS_FILE=/data/status.json
+const STATUS_FILE = process.env.STATUS_FILE || "./status.json";
 
 // --- Middleware
 app.set("trust proxy", 1);
-app.use(cors()); // tighten if you want: cors({ origin: ["https://hackney.needacabapis.co.uk"] })
+app.use(cors()); // tighten with origin: [] if desired
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// --- In-memory store for online/offline by callsign
+// --- In-memory store: callsign -> { online: boolean, updatedAt: ISO }
 let onlineMap = new Map();
 
-// --- Persist to disk (debounced) --------------------------
+// --- Persist to disk (debounced)
 function loadStatusFromDisk() {
   try {
     if (fs.existsSync(STATUS_FILE)) {
@@ -58,7 +59,7 @@ loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
-// --- Extractors / inference --------------------------------
+// --- Extractors / inference
 function extractCallsign(obj) {
   const direct =
     obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ??
@@ -77,13 +78,11 @@ function inferOnline(obj) {
   if (typeof obj?.online === "boolean") return obj.online;
 
   const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "")
-    .toString()
-    .toLowerCase();
+    .toString().toLowerCase();
   if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
   if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
 
-  const sub = (obj?.SubEventType ?? obj?.subEventType ?? "")
-    .toString().toLowerCase();
+  const sub = (obj?.SubEventType ?? obj?.subEventType ?? "").toString().toLowerCase();
   if (sub === "started") return true;
   if (sub === "ended") return false;
 
@@ -114,10 +113,10 @@ function coercePayloadToArray(body) {
   return [b];
 }
 
-// --- Static FIRST (serve the UI) ----------------------------
+// --- Static FIRST (UI)
 app.use(express.static(path.join(__dirname, "public")));
 
-// --- SSE wiring for instant pushes to browser ---------------
+// --- SSE
 let sseClients = new Set();
 
 app.get("/api/status/stream", (req, res) => {
@@ -126,7 +125,6 @@ app.get("/api/status/stream", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  // Initial snapshot
   const snapshot = Array.from(onlineMap.entries()).map(([k, v]) => ({
     callsign: k, online: !!v.online, updatedAt: v.updatedAt || null
   }));
@@ -136,22 +134,22 @@ app.get("/api/status/stream", (req, res) => {
   req.on("close", () => { sseClients.delete(res); });
 });
 
-// Keep-alive heartbeats to avoid idle timeouts
+// Heartbeat
 const HEARTBEAT_MS = 25000;
 setInterval(() => {
   for (const res of sseClients) {
-    try { res.write(`:heartbeat ${Date.now()}\n\n`); } catch { /* ignore */ }
+    try { res.write(`:heartbeat ${Date.now()}\n\n`); } catch {}
   }
 }, HEARTBEAT_MS);
 
 function sseBroadcast(event, payload) {
   const msg = `event: ${event}\ndata:${JSON.stringify(payload)}\n\n`;
   for (const res of sseClients) {
-    try { res.write(msg); } catch { /* ignore broken pipes */ }
+    try { res.write(msg); } catch {}
   }
 }
 
-// --- Webhook receiver ---------------------------------------
+// --- Webhook
 app.post("/webhook/ShiftChange", (req, res) => {
   try {
     if (WEBHOOK_TOKEN) {
@@ -169,29 +167,18 @@ app.post("/webhook/ShiftChange", (req, res) => {
 
       const cs = extractCallsign(item);
       const online = inferOnline(item);
-
-      if (!cs) {
-        console.log("Webhook received but no callsign found", item);
-        continue;
-      }
-      if (online === null) {
-        console.log(`Webhook for ${cs} but could not infer online/offline`, item);
-        continue;
-      }
+      if (!cs) { console.log("No callsign in item", item); continue; }
+      if (online === null) { console.log(`Cannot infer online for ${cs}`, item); continue; }
 
       const rec = {
         online,
-        updatedAt:
-          item?.ModifiedDate ||
-          item?.updatedAt ||
-          item?.timestamp ||
-          new Date().toISOString(),
+        updatedAt: item?.ModifiedDate || item?.updatedAt || item?.timestamp || new Date().toISOString(),
       };
 
       onlineMap.set(normKey(cs), rec);
       updates++;
 
-      console.log(`Status set: callsign ${cs} -> ${online ? "ONLINE" : "OFFLINE"} @ ${rec.updatedAt}`);
+      console.log(`Status set: ${cs} -> ${online ? "ONLINE" : "OFFLINE"} @ ${rec.updatedAt}`);
       sseBroadcast("status", { callsign: normKey(cs), ...rec });
     }
 
@@ -203,36 +190,28 @@ app.post("/webhook/ShiftChange", (req, res) => {
   }
 });
 
-// --- Public read endpoint -----------------------------------
+// --- Read endpoints
 app.get("/api/status", (_req, res) => {
   const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
-    callsign: k,
-    online: !!v.online,
-    updatedAt: v.updatedAt || null,
+    callsign: k, online: !!v.online, updatedAt: v.updatedAt || null,
   }));
   res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
 });
 
-// --- Proxy Autocab Vehicles API ------------------------------
 app.get("/api/vehicles", async (_req, res) => {
   try {
     if (!AUTOCAB_KEY) {
       return res.status(500).json({ error: "Missing AUTOCAB_KEY in .env" });
     }
-
     const url = "https://autocab-api.azure-api.net/vehicle/v1/vehicles";
     const r = await fetch(url, {
-      headers: {
-        "Ocp-Apim-Subscription-Key": AUTOCAB_KEY,
-        "Cache-Control": "no-cache",
-      },
+      headers: { "Ocp-Apim-Subscription-Key": AUTOCAB_KEY, "Cache-Control": "no-cache" },
     });
 
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
       return res.status(r.status).send(txt || `Upstream error: ${r.statusText}`);
     }
-
     const data = await r.json();
     res.json(data);
   } catch (e) {
@@ -241,17 +220,15 @@ app.get("/api/vehicles", async (_req, res) => {
   }
 });
 
-// --- Health & Root ------------------------------------------
+// --- Health & Root
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "index.html"))
-);
+app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// --- Graceful shutdown --------------------------------------
+// --- Graceful shutdown
 process.on("SIGTERM", () => { try { saveStatusToDisk(); } finally { process.exit(0); } });
 process.on("SIGINT",  () => { try { saveStatusToDisk(); } finally { process.exit(0); } });
 
-// --- Start ---------------------------------------------------
+// --- Start
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
