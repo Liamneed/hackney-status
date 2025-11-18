@@ -6,6 +6,70 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
   <link rel="stylesheet" href="hackney.css" />
+
+  <!-- Small extra styles just for status colours -->
+  <style>
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      min-width: 3.1rem;
+      text-transform: uppercase;
+    }
+    .pill-clear {
+      background: rgba(22, 163, 74, 0.12);
+      color: #16a34a;
+    }
+    .pill-busy {
+      background: rgba(234, 179, 8, 0.16);
+      color: #ca8a04;
+    }
+    .pill-offline {
+      background: rgba(220, 38, 38, 0.12);
+      color: #dc2626;
+    }
+    .pill-unknown {
+      background: rgba(148, 163, 184, 0.14);
+      color: #64748b;
+    }
+
+    .driver-status-clear {
+      color: #16a34a;
+      font-weight: 600;
+    }
+    .driver-status-busy {
+      color: #ca8a04;
+      font-weight: 600;
+    }
+    .driver-status-offline {
+      color: #dc2626;
+      font-weight: 600;
+    }
+    .driver-status-unknown {
+      color: #9ca3af;
+      font-style: italic;
+    }
+
+    @media (max-width: 640px) {
+      /* tighten driver status column on mobile */
+      .cell.driver-status-text {
+        font-size: 0.8rem;
+        max-width: 9rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .status-pill {
+        font-size: 0.68rem;
+        padding-inline: 0.4rem;
+      }
+    }
+  </style>
 </head>
 <body>
   <!-- HEADER -->
@@ -122,6 +186,7 @@
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
 
+    // ===== STALENESS (for tooltip only) =====
     const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
     function isStale(updatedAt){
       if (!updatedAt) return true;
@@ -193,21 +258,9 @@
 
     let baseMaster = [];
     let master = [];
-    // onlineMap: key -> { online, updatedAt, driverStatus }
+    // onlineMap: key -> { updatedAt, driverStatus }
     let onlineMap = new Map();
     let statusPollTimer = null;
-
-    // ===== STATUS helpers =====
-    function inferOnline(obj) {
-      if (typeof obj?.online === "boolean") return obj.online;
-      const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
-      if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
-      if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
-      const sub = (obj?.SubEventType ?? obj?.subEventType ?? "").toString().toLowerCase();
-      if (sub === "started") return true;
-      if (sub === "ended") return false;
-      return null;
-    }
 
     function extractCallsign(obj) {
       const direct = obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ?? obj?.vehicleCode ?? obj?.driverCode ?? null;
@@ -229,6 +282,34 @@
       return String(raw || "").trim();
     }
 
+    // === Categorise driverStatus into clear / busy / offline / unknown ===
+    function categorizeDriverStatus(text) {
+      const s = (text || "").toLowerCase();
+      if (!s) return "unknown";
+
+      if (
+        s.includes("off shift") ||
+        s.includes("off-duty") ||
+        s.includes("off duty") ||
+        s.includes("logged off") ||
+        s.includes("signed off") ||
+        s.includes("not on shift")
+      ) return "offline";
+
+      if (s.includes("busy")) return "busy";
+
+      if (
+        s.includes("clear") ||
+        s.includes("free") ||
+        s.includes("on shift") ||
+        s.includes("on duty") ||
+        s.includes("logged on") ||
+        s.includes("logged in")
+      ) return "clear";
+
+      return "unknown";
+    }
+
     function buildOnlineMap(data) {
       const list = getList(data);
       const map = new Map();
@@ -236,59 +317,59 @@
         const cs = item?.callsign ?? extractCallsign(item);
         if (!cs) continue;
 
-        let online = null;
-        if (typeof item?.online === "boolean") {
-          online = item.online;
-        } else {
-          online = inferOnline(item);
-        }
-        if (online === null && !item?.driverStatus && !item?.statusText) {
-          continue;
-        }
+        const statusText = item.driverStatus ?? extractDriverStatus(item) ?? "";
+        const updatedAt  = item.updatedAt || item.timestamp || item.time || item.ModifiedDate || null;
 
         map.set(normKey(cs), {
-          online,
-          updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
-          driverStatus: extractDriverStatus(item) || null,
+          updatedAt,
+          driverStatus: statusText || null,
         });
       }
       return map;
     }
 
-    const onlineFor       = (cs) => {
-      const rec = onlineMap.get(normKey(cs));
-      if (!rec) return null;
-      return rec.online;
-    };
     const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
     const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
+    const categoryFor     = (cs) => categorizeDriverStatus(driverStatusFor(cs));
 
-    // ===== BADGE (dot only) =====
-    function badge(on, updatedAt) {
+    // Online/offline for counters & filters based on category
+    function onlineFor(cs) {
+      const cat = categoryFor(cs);
+      if (cat === "clear" || cat === "busy") return true;
+      if (cat === "offline") return false;
+      return null;
+    }
+
+    // ===== Status pill (replaces dot) =====
+    function statusPill(cat, updatedAt) {
+      let label = "—";
+      let cls = "pill-unknown";
+
+      if (cat === "clear")  { label = "Online";  cls = "pill-clear"; }
+      else if (cat === "busy") { label = "Busy";   cls = "pill-busy"; }
+      else if (cat === "offline") { label = "Offline"; cls = "pill-offline"; }
+
       const stale = isStale(updatedAt);
-      const dotClass =
-        on === true  ? (stale ? "dot dot-online-stale" : "dot dot-online") :
-        on === false ? (stale ? "dot dot-offline-stale" : "dot dot-offline") :
-                       "dot dot-unknown";
-      const tt = updatedAt
-        ? "Last update: " + new Date(updatedAt).toLocaleString()
+      const title = updatedAt
+        ? `Last update: ${new Date(updatedAt).toLocaleString()}${stale ? " (stale)" : ""}`
         : "No timestamp";
-      return `<span class="${dotClass}" title="${tt}"></span>`;
+
+      return `<span class="status-pill ${cls}" title="${title}">${label}</span>`;
     }
 
     // ===== ROW chrome =====
     function rowChrome(on){
       if (highlightMode === "background") {
-        if (on === true)  return "table-row row-bg-online";
-        if (on === false) return "table-row row-bg-offline";
-        return "table-row row-bg-neutral";
+        if (on === true)  return "row row-bg-online";
+        if (on === false) return "row row-bg-offline";
+        return "row row-bg-neutral";
       }
       if (highlightMode === "border") {
-        if (on === true)  return "table-row row-border-online";
-        if (on === false) return "table-row row-border-offline";
-        return "table-row row-border-neutral";
+        if (on === true)  return "row row-border-online";
+        if (on === false) return "row row-border-offline";
+        return "row row-border-neutral";
       }
-      return "table-row";
+      return "row";
     }
 
     // ===== ROW =====
@@ -296,11 +377,20 @@
       const cs   = getCallsign(v) || "";
       const plat = getPlate(v)    || "—";
       const reg  = getReg(v)      || "—";
-      const on   = onlineFor(cs);
-      const ts   = updatedFor(cs);
-      const ds   = driverStatusFor(cs) || "—";
+
+      const dsText = driverStatusFor(cs) || "—";
+      const cat    = categoryFor(cs);
+      const on     = (cat === "clear" || cat === "busy") ? true :
+                     (cat === "offline" ? false : null);
+      const ts     = updatedFor(cs);
 
       const rowClass = rowChrome(on) + (highlight ? " row-flash" : "");
+
+      const dsClass =
+        cat === "clear"   ? "driver-status-clear"   :
+        cat === "busy"    ? "driver-status-busy"    :
+        cat === "offline" ? "driver-status-offline" :
+                            "driver-status-unknown";
 
       return `
         <div id="row-${normKey(cs)}" class="${rowClass}">
@@ -311,9 +401,9 @@
           <div class="cell">
             <span class="pill-reg mono strong">${reg}</span>
           </div>
-          <div class="cell driver-status-text">${ds}</div>
+          <div class="cell driver-status-text ${dsClass}">${dsText}</div>
           <div class="cell text-right cell-status">
-            ${badge(on, ts)}
+            ${statusPill(cat, ts)}
           </div>
         </div>
       `;
@@ -457,7 +547,6 @@
             for (const item of (payload?.data || [])) {
               if (!item?.callsign) continue;
               m.set(normKey(item.callsign), {
-                online: !!item.online,
                 updatedAt: item.updatedAt || null,
                 driverStatus: item.driverStatus || null,
               });
@@ -472,17 +561,12 @@
             const p = JSON.parse(evt.data);
             if (!p?.callsign) return;
             const key = normKey(p.callsign);
-            const prevRec = onlineMap.get(key) || {};
-            const prevOnline  = prevRec.online;
-            const prevStatus  = prevRec.driverStatus || null;
-
+            const prev = onlineMap.get(key) || {};
             onlineMap.set(key, {
-              online: !!p.online,
-              updatedAt: p.updatedAt || null,
-              driverStatus: p.driverStatus ?? prevStatus,
+              updatedAt: p.updatedAt || prev.updatedAt || null,
+              driverStatus: p.driverStatus ?? prev.driverStatus ?? null,
             });
-
-            applyFiltersAndRender(prevOnline !== p.online ? key : null);
+            applyFiltersAndRender(key);
           } catch {}
         });
 
