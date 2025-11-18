@@ -193,7 +193,7 @@
 
     let baseMaster = [];
     let master = [];
-    // onlineMap: key -> { online, updatedAt, driverStatus }
+    // onlineMap: key -> { online, updatedAt, lastPingAt, driverStatus }
     let onlineMap = new Map();
     let statusPollTimer = null;
 
@@ -217,6 +217,30 @@
       return d?.Callsign ?? d?.callsign ?? d?.callSign ?? v?.Callsign ?? v?.callsign ?? v?.callSign ?? null;
     }
 
+    function extractDriverStatus(obj) {
+      const raw =
+        obj?.driverStatus ??
+        obj?.statusText ??
+        obj?.stateText ??
+        obj?.driver_state ??
+        obj?.status ??
+        obj?.availability ??
+        "";
+      return String(raw || "").trim();
+    }
+
+    function computeEffectiveOnline(rec) {
+      if (!rec) return null;
+      if (rec.lastPingAt) {
+        const t = new Date(rec.lastPingAt).getTime();
+        if (Number.isFinite(t) && Date.now() - t > (Number(process.env?.PING_TIMEOUT_MINUTES || 5) * 60 * 1000 || 5 * 60 * 1000)) {
+          return false;
+        }
+      }
+      if (typeof rec.online === "boolean") return rec.online;
+      return null;
+    }
+
     function buildOnlineMap(data) {
       const list = getList(data);
       const map = new Map();
@@ -230,44 +254,37 @@
         } else {
           online = inferOnline(item);
         }
-        if (online === null) continue;
+        if (online === null && !item?.driverStatus && !item?.statusText) {
+          continue;
+        }
 
         map.set(normKey(cs), {
           online,
           updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
-          driverStatus: item?.driverStatus ?? item?.statusText ?? null,
+          driverStatus: extractDriverStatus(item) || null,
         });
       }
       return map;
     }
 
-    const onlineFor       = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const onlineFor       = (cs) => {
+      const rec = onlineMap.get(normKey(cs));
+      if (!rec) return null;
+      return rec.online;
+    };
     const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
     const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
 
-    // ===== BADGE =====
+    // ===== BADGE (dot only) =====
     function badge(on, updatedAt) {
       const dotClass =
         on === true  ? "dot dot-online" :
         on === false ? "dot dot-offline" :
                        "dot dot-unknown";
-      const label =
-        on === true  ? "ONLINE" :
-        on === false ? "OFFLINE" : "—";
-      const pillClass =
-        on === null ? "status-pill pill-unknown" :
-        on ? "status-pill pill-online" : "status-pill pill-offline";
       const tt = updatedAt
         ? "Last update: " + new Date(updatedAt).toLocaleString()
         : "No timestamp";
-      return `
-        <span class="badge-wrap" title="${tt}">
-          <span class="${dotClass}" aria-hidden="true"></span>
-          <span class="${pillClass}">
-            ${label}
-          </span>
-        </span>
-      `;
+      return `<span class="${dotClass}" title="${tt}"></span>`;
     }
 
     // ===== ROW chrome =====
@@ -306,7 +323,7 @@
             <span class="pill-reg mono strong">${reg}</span>
           </div>
           <div class="cell driver-status-text">${ds}</div>
-          <div class="cell text-right">
+          <div class="cell text-right cell-status">
             ${badge(on, ts)}
           </div>
         </div>
