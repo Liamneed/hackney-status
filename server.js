@@ -34,7 +34,7 @@ app.use(express.urlencoded({ extended: true }));
  *   {
  *     lastPingAt: ISO string,     // last ping (Status or HackneyLocation)
  *     updatedAt: ISO string,      // last update time
- *     driverStatus: string | null // Busy / Clear / etc
+ *     driverStatus: string | null // VehicleStatus string
  *   }
  *
  * Online is ALWAYS derived from lastPingAt + timeout.
@@ -72,7 +72,6 @@ loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
-// Helpers
 function computeOnline(rec) {
   if (!rec || !rec.lastPingAt) return false;
   const t = new Date(rec.lastPingAt).getTime();
@@ -81,6 +80,7 @@ function computeOnline(rec) {
   return age <= OFFLINE_TIMEOUT_MS;
 }
 
+// generic callsign extractor (used by HackneyLocation)
 function extractCallsignGeneric(obj) {
   const direct =
     obj?.callsign ??
@@ -102,18 +102,6 @@ function extractCallsignGeneric(obj) {
     v?.Callsign ?? v?.callsign ?? v?.callSign ??
     null
   );
-}
-
-function normaliseVehicleStatus(vehicleStatus) {
-  if (!vehicleStatus) return "";
-  const s = String(vehicleStatus).trim();
-  const lower = s.toLowerCase();
-
-  if (lower.startsWith("busy")) return "Busy";
-  if (lower.includes("clear") || lower.includes("free")) return "Clear";
-
-  // Fallback: show raw string
-  return s;
 }
 
 // --- Static files
@@ -198,7 +186,7 @@ app.post("/webhook/HackneyLocation", (req, res) => {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        // driverStatus unchanged here – this is just a ping
+        // driverStatus unchanged here
       };
 
       onlineMap.set(key, rec);
@@ -229,7 +217,16 @@ app.post("/webhook/Status", (req, res) => {
     }
 
     const body = req.body || {};
-    const tracks = Array.isArray(body.VehicleTracks) ? body.VehicleTracks : [];
+    // Autocab payload: { EventType: "VehicleTracksChanged", VehicleTracks: [ ... ] }
+    let tracks = [];
+
+    if (Array.isArray(body.VehicleTracks)) {
+      tracks = body.VehicleTracks;
+    } else if (Array.isArray(body.data)) {
+      tracks = body.data;
+    } else if (Array.isArray(body)) {
+      tracks = body;
+    }
 
     let updates = 0;
 
@@ -238,19 +235,29 @@ app.post("/webhook/Status", (req, res) => {
 
       const vehicle = track.Vehicle || {};
       const driver  = track.Driver  || {};
-      const cs = vehicle.Callsign || driver.Callsign || null;
+
+      const cs =
+        vehicle.Callsign ||
+        driver.Callsign ||
+        extractCallsignGeneric(track) ||
+        null;
+
       if (!cs) continue;
 
       const key = normKey(cs);
-      const ts  = track.Timestamp || new Date().toISOString();
-      const vs  = normaliseVehicleStatus(track.VehicleStatus);
+      const ts  = track.Timestamp || track.timestamp || new Date().toISOString();
+
+      // This is the important part for you:
+      // set driverStatus from VehicleStatus EXACTLY as sent.
+      const rawStatus = track.VehicleStatus || track.vehicleStatus || null;
+      const driverStatus = rawStatus ? String(rawStatus) : null;
 
       const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
-        lastPingAt: ts,        // treat this as a ping
+        lastPingAt: ts,              // treat this as a ping
         updatedAt: ts,
-        driverStatus: vs || existing.driverStatus || null,
+        driverStatus: driverStatus ?? existing.driverStatus ?? null,
       };
 
       onlineMap.set(key, rec);
