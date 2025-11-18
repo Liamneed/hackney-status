@@ -19,41 +19,37 @@ const AUTOCAB_KEY    = process.env.AUTOCAB_KEY || "";
 const WEBHOOK_TOKEN  = process.env.WEBHOOK_TOKEN || "";
 const STATUS_FILE    = process.env.STATUS_FILE || "./status.json";
 
-// minutes before a vehicle is considered offline if no ping
+// HOW LONG a ping keeps a vehicle ONLINE (minutes)
 const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 10);
 const OFFLINE_TIMEOUT_MS   = PING_TIMEOUT_MINUTES * 60 * 1000;
 
-// --- Middleware
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * Store per callsign:
- *   {
- *     lastPingAt: ISO string,     // last ping (Status / ShiftChange / HackneyLocation)
- *     updatedAt: ISO string,      // last update time
- *     driverStatus: string | null,// "Busy (Cash)" / "Busy (Account)" / "Clear" / etc.
- *     explicitOnline: boolean|null// hard override from ShiftChange (true/false)
- *   }
- *
- * Online is derived from lastPingAt + timeout, PLUS explicitOnline if set.
+ * onlineMap: callsign -> {
+ *   lastPingAt: ISO,
+ *   updatedAt: ISO,
+ *   driverStatus: string | null,  // from VehicleStatus or shift status
+ *   explicitOnline: boolean|null  // hard override (ShiftChange)
+ * }
  */
 let onlineMap = new Map();
 
-// --- Persist to disk (debounced)
+// ---------- Persistence ----------
 function loadStatusFromDisk() {
   try {
     if (fs.existsSync(STATUS_FILE)) {
       const raw = JSON.parse(fs.readFileSync(STATUS_FILE, "utf8"));
       onlineMap = new Map(raw.map(([k, v]) => [k, v]));
-      console.log(`Loaded ${onlineMap.size} status records from ${STATUS_FILE}.`);
+      console.log(`Loaded ${onlineMap.size} records from ${STATUS_FILE}`);
     } else {
-      console.log(`No ${STATUS_FILE} found; starting fresh.`);
+      console.log(`No ${STATUS_FILE}, starting clean`);
     }
   } catch (e) {
-    console.warn("Could not load status file:", e.message);
+    console.warn("loadStatusFromDisk failed:", e.message);
   }
 }
 
@@ -65,25 +61,20 @@ function saveStatusToDisk() {
       const arr = Array.from(onlineMap.entries());
       fs.writeFileSync(STATUS_FILE, JSON.stringify(arr), "utf8");
     } catch (e) {
-      console.warn("Could not save status file:", e.message);
+      console.warn("saveStatusToDisk failed:", e.message);
     }
   }, 500);
 }
+
 loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
-/**
- * Compute effective online:
- *  1. If explicitOnline === false → always OFFLINE (dot red).
- *  2. If no lastPingAt → OFFLINE.
- *  3. If lastPingAt older than timeout → OFFLINE.
- *  4. If explicitOnline === true → ONLINE.
- *  5. Else, recent ping and no explicit flag → ONLINE.
- */
+// ---------- ONLINE LOGIC ----------
 function computeOnline(rec) {
   if (!rec) return false;
 
+  // Hard override from ShiftChange (e.g. explicit offline)
   if (rec.explicitOnline === false) return false;
 
   if (!rec.lastPingAt) return false;
@@ -93,11 +84,11 @@ function computeOnline(rec) {
   const age = Date.now() - t;
   if (age > OFFLINE_TIMEOUT_MS) return false;
 
-  if (rec.explicitOnline === true) return true;
-
+  // If ShiftChange said explicitOnline true, or just recent ping → online
   return true;
 }
 
+// ---------- Common helpers ----------
 function extractCallsignGeneric(obj) {
   const direct =
     obj?.callsign ??
@@ -121,67 +112,66 @@ function extractCallsignGeneric(obj) {
   );
 }
 
-// Generic helper to turn various payload shapes into an array
 function coercePayloadToArray(body) {
   const b = body || {};
   if (Array.isArray(b)) return b;
+  if (Array.isArray(b.VehicleTracks)) return b.VehicleTracks;
   if (Array.isArray(b.data)) return b.data;
   if (Array.isArray(b.items)) return b.items;
-  if (Array.isArray(b.VehicleTracks)) return b.VehicleTracks;
   if (Array.isArray(b.Shifts)) return b.Shifts;
   if (Array.isArray(b.Events)) return b.Events;
   return [b];
 }
 
-// Map VehicleStatus to human-friendly text
-function mapVehicleStatus(raw) {
+// VERY simple VehicleStatus → label
+function vehicleStatusLabel(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
   const lower = s.toLowerCase();
 
   if (lower.startsWith("busy")) {
-    if (lower.includes("account")) return "Busy (Account)";
     if (lower.includes("cash"))    return "Busy (Cash)";
+    if (lower.includes("account")) return "Busy (Account)";
     return "Busy";
   }
-
   if (lower.includes("clear") || lower.includes("free")) return "Clear";
 
-  // fallback to raw string
-  return s;
+  return s; // raw
 }
 
-// Infer explicitOnline from ShiftChange status strings
-function inferOnlineFromShift(statusText, subType, eventType) {
-  const s = (statusText || "").toString().toLowerCase();
-  const sub = (subType || "").toString().toLowerCase();
+// Infer explicit online/offline from ShiftChange strings
+function inferExplicitOnlineFromShift(rawStatus, eventType, subType) {
+  const s   = (rawStatus || "").toString().toLowerCase();
   const evt = (eventType || "").toString().toLowerCase();
+  const sub = (subType || "").toString().toLowerCase();
 
-  // online-ish words
+  // ONLINE hints
   if (
-    s.includes("start") || s.includes("on") || s.includes("open") ||
-    s.includes("logged in") || s.includes("loggedon") || s.includes("signed on") ||
-    sub === "started" || evt.includes("shiftstart")
-  ) {
-    return true;
-  }
+    s.includes("start") ||
+    s.includes("on shift") ||
+    s.includes("logged in") ||
+    s.includes("loggedon") ||
+    s.includes("signed on") ||
+    evt.includes("shiftstart") ||
+    sub === "started"
+  ) return true;
 
-  // offline-ish words
+  // OFFLINE hints
   if (
-    s.includes("end") || s.includes("off") || s.includes("closed") ||
-    s.includes("logged out") || s.includes("loggedoff") || s.includes("signed off") ||
-    sub === "ended" || evt.includes("shiftend")
-  ) {
-    return false;
-  }
+    s.includes("end") ||
+    s.includes("off shift") ||
+    s.includes("logged out") ||
+    s.includes("loggedoff") ||
+    s.includes("signed off") ||
+    s.includes("off") && !s.includes("offline status ignored") ||
+    evt.includes("shiftend") ||
+    sub === "ended"
+  ) return false;
 
   return null;
 }
 
-// --- Static files
-app.use(express.static(path.join(__dirname, "public")));
-
-// --- SSE
+// ---------- SSE ----------
 let sseClients = new Set();
 
 app.get("/api/status/stream", (req, res) => {
@@ -199,21 +189,17 @@ app.get("/api/status/stream", (req, res) => {
   res.write(`event: snapshot\ndata:${JSON.stringify({ data: snapshot })}\n\n`);
 
   sseClients.add(res);
-  req.on("close", () => {
-    sseClients.delete(res);
-  });
+  req.on("close", () => sseClients.delete(res));
 });
 
 const HEARTBEAT_MS = 25000;
 setInterval(() => {
   for (const res of sseClients) {
-    try {
-      res.write(`:heartbeat ${Date.now()}\n\n`);
-    } catch {/* ignore */}
+    try { res.write(`:heartbeat ${Date.now()}\n\n`); } catch {}
   }
 }, HEARTBEAT_MS);
 
-function sseBroadcastUpdate(callsign, rec) {
+function broadcastStatus(callsign, rec) {
   const payload = {
     callsign,
     online: computeOnline(rec),
@@ -222,11 +208,11 @@ function sseBroadcastUpdate(callsign, rec) {
   };
   const msg = `event: status\ndata:${JSON.stringify(payload)}\n\n`;
   for (const res of sseClients) {
-    try { res.write(msg); } catch {/* ignore */}
+    try { res.write(msg); } catch {}
   }
 }
 
-// --- Webhook auth helper
+// ---------- Webhook auth ----------
 function checkWebhookAuth(req, res) {
   if (!WEBHOOK_TOKEN) return true;
   const provided = req.headers["x-webhook-token"];
@@ -237,7 +223,7 @@ function checkWebhookAuth(req, res) {
   return true;
 }
 
-// --- Webhook: HackneyLocation (simple ping, no status)
+// ---------- HackneyLocation: simple ping ----------
 app.post("/webhook/HackneyLocation", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
@@ -248,7 +234,6 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
-
       const cs = extractCallsignGeneric(item);
       if (!cs) continue;
       const key = normKey(cs);
@@ -260,34 +245,29 @@ app.post("/webhook/HackneyLocation", (req, res) => {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        // location ping strongly suggests online
-        explicitOnline: existing.explicitOnline ?? true,
+        // location ping = definitely online
+        explicitOnline: true,
       };
 
       onlineMap.set(key, rec);
       updates++;
-      sseBroadcastUpdate(key, rec);
+      broadcastStatus(key, rec);
     }
 
-    if (updates > 0) {
-      saveStatusToDisk();
-      console.log(`HackneyLocation webhook: updated ${updates} vehicles`);
-    }
-
+    if (updates > 0) saveStatusToDisk();
     res.json({ ok: true, updates });
   } catch (e) {
-    console.error("HackneyLocation webhook error:", e);
+    console.error("HackneyLocation error:", e);
     res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-// --- Webhook: Status — VehicleTracksChanged (BUSY / CLEAR + ping)
+// ---------- Status: VehicleTracksChanged ----------
 app.post("/webhook/Status", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
 
     const body = req.body || {};
-    // Autocab payload: { EventType: "VehicleTracksChanged", VehicleTracks: [ ... ] }
     const tracks = Array.isArray(body.VehicleTracks)
       ? body.VehicleTracks
       : coercePayloadToArray(body);
@@ -305,33 +285,31 @@ app.post("/webhook/Status", (req, res) => {
         driver.Callsign ||
         extractCallsignGeneric(track) ||
         null;
-
       if (!cs) continue;
 
       const key = normKey(cs);
       const ts  = track.Timestamp || track.timestamp || new Date().toISOString();
 
-      const rawStatus  = track.VehicleStatus || track.vehicleStatus || null;
-      const pretty     = mapVehicleStatus(rawStatus);
+      const rawStatus = track.VehicleStatus || track.vehicleStatus || null;
+      const label     = vehicleStatusLabel(rawStatus);
 
       const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
-        lastPingAt: ts,              // treat this as a ping
+        lastPingAt: ts,
         updatedAt: ts,
-        driverStatus: pretty ?? existing.driverStatus ?? null,
-        // on a job → definitely online
-        explicitOnline: true,
+        driverStatus: label ?? existing.driverStatus ?? null,
+        explicitOnline: true,   // on a track = online
       };
 
       onlineMap.set(key, rec);
       updates++;
-      sseBroadcastUpdate(key, rec);
+      broadcastStatus(key, rec);
     }
 
     if (updates > 0) {
+      console.log(`Status webhook: updated ${updates} tracks`);
       saveStatusToDisk();
-      console.log(`Status webhook (VehicleTracksChanged): updated ${updates} vehicles`);
     }
 
     res.json({ ok: true, updates });
@@ -341,7 +319,7 @@ app.post("/webhook/Status", (req, res) => {
   }
 });
 
-// --- Webhook: ShiftChange — logon/logoff, treat as ping + explicit online/offline
+// ---------- ShiftChange: logon/logoff ----------
 app.post("/webhook/ShiftChange", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
@@ -354,13 +332,14 @@ app.post("/webhook/ShiftChange", (req, res) => {
 
       const vehicle = item.Vehicle || {};
       const driver  = item.Driver  || {};
+
       const cs =
         vehicle.Callsign ||
         driver.Callsign ||
         extractCallsignGeneric(item) ||
         null;
-
       if (!cs) continue;
+
       const key = normKey(cs);
 
       const ts =
@@ -382,20 +361,27 @@ app.post("/webhook/ShiftChange", (req, res) => {
       const eventType = item.EventType || item.Event || null;
       const subType   = item.SubEventType || item.subEventType || null;
 
-      const explicit = inferOnlineFromShift(rawStatus, subType, eventType);
+      const explicit = inferExplicitOnlineFromShift(rawStatus, eventType, subType);
 
       const existing = onlineMap.get(key) || {};
-      const rec = {
+      let rec = {
         ...existing,
-        lastPingAt: ts,             // treat ShiftChange as activity
+        lastPingAt: ts,
         updatedAt: ts,
         driverStatus: (rawStatus ? String(rawStatus) : existing.driverStatus) || null,
-        explicitOnline: explicit !== null ? explicit : existing.explicitOnline ?? null,
+        explicitOnline: existing.explicitOnline ?? null,
       };
+
+      if (explicit === true) {
+        rec.explicitOnline = true;   // force online
+      } else if (explicit === false) {
+        rec.explicitOnline = false;  // force offline immediately
+        rec.lastPingAt = "1970-01-01T00:00:00.000Z"; // make sure timeout logic doesn't keep it green
+      }
 
       onlineMap.set(key, rec);
       updates++;
-      sseBroadcastUpdate(key, rec);
+      broadcastStatus(key, rec);
 
       console.log(
         `ShiftChange: ${key} ts=${ts} rawStatus=${rawStatus} explicitOnline=${rec.explicitOnline}`
@@ -403,8 +389,8 @@ app.post("/webhook/ShiftChange", (req, res) => {
     }
 
     if (updates > 0) {
-      saveStatusToDisk();
       console.log(`ShiftChange webhook: updated ${updates} vehicles`);
+      saveStatusToDisk();
     }
 
     res.json({ ok: true, updates });
@@ -414,31 +400,25 @@ app.post("/webhook/ShiftChange", (req, res) => {
   }
 });
 
-// --- API used by frontend
+// ---------- Public API ----------
 app.get("/api/status", (_req, res) => {
-  try {
-    const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
-      callsign: k,
-      online: computeOnline(v),
-      updatedAt: v.updatedAt || null,
-      driverStatus: v.driverStatus || null,
-    }));
-    res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
-  } catch (e) {
-    console.error("/api/status error:", e);
-    res.status(500).json({ error: e.message });
-  }
+  const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
+    callsign: k,
+    online: computeOnline(v),
+    updatedAt: v.updatedAt || null,
+    driverStatus: v.driverStatus || null,
+  }));
+  res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
 });
 
-// Proxy to Autocab for vehicle list
+// Proxy vehicles from Autocab
 app.get("/api/vehicles", async (_req, res) => {
   try {
     if (!AUTOCAB_KEY) {
-      return res.status(500).json({ error: "Missing AUTOCAB_KEY in environment" });
+      return res.status(500).json({ error: "Missing AUTOCAB_KEY in .env" });
     }
 
     const url = "https://autocab-api.azure-api.net/vehicle/v1/vehicles";
-
     const r = await fetch(url, {
       headers: {
         "Ocp-Apim-Subscription-Key": AUTOCAB_KEY,
@@ -448,25 +428,25 @@ app.get("/api/vehicles", async (_req, res) => {
 
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
-      console.error("Upstream /vehicle error:", r.status, txt);
+      console.error("Upstream /vehicles error:", r.status, txt);
       return res.status(r.status).send(txt || `Upstream error: ${r.statusText}`);
     }
 
     const data = await r.json();
     res.json(data);
   } catch (e) {
-    console.error("Proxy /api/vehicles error:", e);
+    console.error("/api/vehicles error:", e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// --- Health & Root
+// ---------- Health & root ----------
+app.use(express.static(path.join(__dirname, "public")));
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "index.html"))
 );
 
-// --- Graceful shutdown
 process.on("SIGTERM", () => {
   try { saveStatusToDisk(); } finally { process.exit(0); }
 });
@@ -474,8 +454,7 @@ process.on("SIGINT", () => {
   try { saveStatusToDisk(); } finally { process.exit(0); }
 });
 
-// --- Start
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
-  console.log(`ONLINE timeout set to ${PING_TIMEOUT_MINUTES} minute(s).`);
+  console.log(`PING timeout: ${PING_TIMEOUT_MINUTES} minute(s).`);
 });
