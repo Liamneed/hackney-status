@@ -339,7 +339,7 @@ function checkWebhookAuth(req, res) {
   return true;
 }
 
-// ---------- HackneyLocation: simple ping (no longer forces online) ----------
+// ---------- HackneyLocation: simple ping (now can mark online) ----------
 app.post("/webhook/HackneyLocation", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
@@ -360,11 +360,20 @@ app.post("/webhook/HackneyLocation", (req, res) => {
       const ts = item.Timestamp || item.timestamp || item.time || nowIso;
 
       const existing = onlineMap.get(key) || {};
+
+      // NEW LOGIC:
+      // - If we already know they are explicitly OFF (false), keep them off.
+      // - Otherwise (undefined/null/true), treat a location ping as "working / online".
+      let explicitOnline = existing.explicitOnline;
+      if (explicitOnline === undefined || explicitOnline === null) {
+        explicitOnline = true;
+      }
+
       const rec = {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        // NOTE: we do NOT change explicitOnline here
+        explicitOnline,
       };
 
       onlineMap.set(key, rec);
