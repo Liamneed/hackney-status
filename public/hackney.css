@@ -48,7 +48,7 @@ body {
 .header-inner {
   max-width: 64rem;
   margin: 0 auto;
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.7rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -90,7 +90,7 @@ body {
 .btn-ghost,
 .btn-outline {
   font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
+  padding: 0.2rem 0.45rem;
   border-radius: 0.5rem;
   border: 1px solid #4b5563;
   background: transparent;
@@ -100,7 +100,7 @@ body {
 
 .btn-outline {
   font-size: 0.8rem;
-  padding: 0.3rem 0.75rem;
+  padding: 0.25rem 0.6rem;
 }
 
 .btn-outline:hover {
@@ -111,14 +111,14 @@ body {
 .header-controls {
   max-width: 64rem;
   margin: 0 auto;
-  padding: 0 0.75rem 0.6rem;
+  padding: 0 0.7rem 0.5rem;
 }
 
 .controls-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 
 /* Search */
@@ -127,11 +127,11 @@ body {
   min-width: 220px;
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
   border-radius: 0.65rem;
   border: 1px solid #4b5563;
   background: #020617;
-  padding: 0.25rem 0.65rem;
+  padding: 0.25rem 0.55rem;
 }
 
 .search-icon {
@@ -146,7 +146,7 @@ body {
   background: transparent;
   color: #e5e7eb;
   font-size: 0.9rem;
-  padding: 0.2rem 0;
+  padding: 0.15rem 0;
 }
 
 .search-input::placeholder {
@@ -160,7 +160,7 @@ body {
   background: #020617;
   color: #e5e7eb;
   font-size: 0.8rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.3rem 0.55rem;
 }
 
 .control-label {
@@ -180,7 +180,7 @@ body {
 .table-header-wrap {
   position: sticky;
   z-index: 30;
-  top: 0; /* gets overridden by JS */
+  top: 0; /* overridden by JS */
 }
 
 .table-header {
@@ -196,7 +196,7 @@ body {
 .main {
   max-width: 64rem;
   margin: 0 auto;
-  padding: 0.75rem 0.75rem 1rem;
+  padding: 0.6rem 0.7rem 0.9rem;
 }
 
 .card {
@@ -210,20 +210,13 @@ body {
 .table-row,
 .row {
   display: grid;
-  grid-template-columns: 90px minmax(150px, 1.4fr) minmax(120px, 1.1fr) minmax(120px, 1.2fr) 80px;
+  grid-template-columns: 90px minmax(150px, 1.4fr) minmax(120px, 1.1fr) minmax(120px, 1.2fr) 60px;
   column-gap: 0.5rem;
   align-items: center;
 }
 
-@media (max-width: 600px) {
-  .table-row,
-  .row {
-    grid-template-columns: 70px 1.2fr minmax(90px, 1fr) minmax(90px, 1fr) 60px;
-  }
-}
-
 .row {
-  padding: 0.6rem 0.9rem;
+  padding: 0.45rem 0.75rem;
   border-bottom: 1px solid #111827;
   position: relative;
 }
@@ -274,21 +267,22 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 0.85rem;
 }
 
 /* Pills */
 .pill-muted {
   display: inline-block;
-  padding: 0.1rem 0.45rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 0.6rem;
   border: 1px solid #4b5563;
   background: #020617;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
 }
 
 .pill-reg {
   display: inline-block;
-  padding: 0.1rem 0.45rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 0.6rem;
   border: 1px solid #eab308;
   background: #eab308;
@@ -298,15 +292,13 @@ body {
 
 /* Driver status text */
 .driver-status-text {
-  font-size: 0.75rem;
+  font-size: 0.76rem;
   color: #e5e7eb;
 }
 
-/* Status badge */
-.badge-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
+/* Status dot */
+.cell-status {
+  display: flex;
   justify-content: flex-end;
 }
 
@@ -328,36 +320,13 @@ body {
   background: #6b7280;
 }
 
-.status-pill {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-}
-
-.pill-online {
-  background: #16a34a;
-  color: #ecfdf5;
-}
-
-.pill-offline {
-  background: #dc2626;
-  color: #fee2e2;
-}
-
-.pill-unknown {
-  background: #4b5563;
-  color: #e5e7eb;
-}
-
 /* Skeleton */
 .skeleton {
   border-top: 1px solid #111827;
 }
 
 .skeleton-row {
-  height: 2.8rem;
+  height: 2.6rem;
   background: linear-gradient(90deg, #0f172a 0%, #111827 50%, #0f172a 100%);
   background-size: 200% 100%;
   animation: skeletonPulse 1.2s ease-in-out infinite;
@@ -381,4 +350,67 @@ body {
 
 .error-text {
   color: #fecaca;
+}
+
+/* ===== Mobile tweaks ===== */
+@media (max-width: 640px) {
+  .header-inner {
+    padding: 0.45rem 0.55rem;
+    gap: 0.4rem;
+  }
+
+  .header-controls {
+    padding: 0 0.55rem 0.45rem;
+  }
+
+  .main {
+    padding: 0.5rem 0.55rem 0.75rem;
+  }
+
+  .controls-row {
+    gap: 0.3rem;
+  }
+
+  .control-select {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.45rem;
+  }
+
+  .search-box {
+    min-width: 180px;
+    padding: 0.2rem 0.45rem;
+  }
+
+  .search-input {
+    font-size: 0.8rem;
+  }
+
+  .table-row,
+  .row {
+    grid-template-columns: 64px minmax(90px, 1.2fr) minmax(90px, 1fr) minmax(80px, 1fr) 40px;
+    column-gap: 0.35rem;
+  }
+
+  .row {
+    padding: 0.35rem 0.55rem;
+  }
+
+  .cell {
+    font-size: 0.78rem;
+  }
+
+  .pill-muted,
+  .pill-reg {
+    font-size: 0.75rem;
+    padding: 0.05rem 0.32rem;
+  }
+
+  .driver-status-text {
+    font-size: 0.7rem;
+  }
+
+  .dot {
+    width: 0.5rem;
+    height: 0.5rem;
+  }
 }
