@@ -19,7 +19,7 @@ const AUTOCAB_KEY    = process.env.AUTOCAB_KEY || "";
 const WEBHOOK_TOKEN  = process.env.WEBHOOK_TOKEN || "";
 const STATUS_FILE    = process.env.STATUS_FILE || "./status.json";
 
-// HOW LONG a ping keeps a vehicle ONLINE (minutes)
+// HOW LONG a ping keeps a vehicle ONLINE (minutes) before timing out
 const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 10);
 const OFFLINE_TIMEOUT_MS   = PING_TIMEOUT_MINUTES * 60 * 1000;
 
@@ -34,8 +34,8 @@ app.use(express.urlencoded({ extended: true }));
  *   updatedAt: ISO,
  *   driverStatusCode: string | null,   // raw VehicleStatus (BusyMeterOff, …)
  *   driverStatusLabel: string | null,  // friendly label for UI
- *   driverStatus: string | null,       // alias = driverStatusLabel (for backwards compat)
- *   explicitOnline: boolean|null       // hard override (ShiftChange / track)
+ *   driverStatus: string | null,       // alias of driverStatusLabel (backwards compat)
+ *   explicitOnline: boolean|null       // true = on shift / tracking, false = off shift
  * }
  */
 let onlineMap = new Map();
@@ -45,7 +45,6 @@ let lastHackneyLocationPayload = null;
 let lastStatusPayload = null;
 let lastShiftChangePayload = null;
 
-// helper to safely log truncated JSON to prevent log spam/crash
 function debugLog(label, payload) {
   console.log(`\n===== ${label} @ ${new Date().toISOString()} =====`);
   try {
@@ -94,35 +93,46 @@ loadStatusFromDisk();
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
 // ---------- ONLINE LOGIC ----------
+//
+// Rules:
+// - If status code/label maps to "Not Working" / off shift → ALWAYS offline.
+// - Otherwise, driver is only "online" if explicitOnline === true
+//   AND (optional) lastPingAt is recent.
+//
 function computeOnline(rec) {
   if (!rec) return false;
 
-  const statusLower = (rec.driverStatusLabel || rec.driverStatus || "").toString().toLowerCase();
+  const code = rec.driverStatusCode || "";
+  const statusLower = (
+    rec.driverStatusLabel ||
+    rec.driverStatus ||
+    ""
+  ).toString().toLowerCase();
 
-  // 1) Anything that clearly looks like OFF SHIFT should always be offline
   if (
+    code === "NotWorking" ||
+    statusLower.includes("not working") ||
     statusLower.includes("off shift") ||
     statusLower.includes("off-duty") ||
     statusLower.includes("off duty") ||
     statusLower.includes("logged off") ||
     statusLower.includes("signed off") ||
-    statusLower.includes("not on shift") ||
-    statusLower.includes("not working")
+    statusLower.includes("not on shift")
   ) {
     return false;
   }
 
-  // 2) Explicit overrides from ShiftChange / Status
-  if (rec.explicitOnline === false) return false;
-  if (rec.explicitOnline === true)  return true;
+  // must have an explicit "online" flag from Status / ShiftChange
+  if (rec.explicitOnline !== true) return false;
 
-  // 3) Otherwise, fall back to lastPingAt timeout
-  if (!rec.lastPingAt) return false;
-  const t = new Date(rec.lastPingAt).getTime();
-  if (!Number.isFinite(t)) return false;
-
-  const age = Date.now() - t;
-  if (age > OFFLINE_TIMEOUT_MS) return false;
+  // Optional timeout for stale pings
+  if (rec.lastPingAt) {
+    const t = new Date(rec.lastPingAt).getTime();
+    if (Number.isFinite(t)) {
+      const age = Date.now() - t;
+      if (age > OFFLINE_TIMEOUT_MS) return false;
+    }
+  }
 
   return true;
 }
@@ -166,7 +176,8 @@ function coercePayloadToArray(body) {
 function vehicleStatusLabel(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
-  const lower = s.toLowerCase();
+
+  if (raw === "Clear") return "Clear";
 
   if (raw === "BusyMeterOff" || raw === "BusyMeterOffAccount") {
     return "Dispatched";
@@ -177,15 +188,16 @@ function vehicleStatusLabel(raw) {
   if (raw === "BusyMeterOnFromClear") {
     return "Street Booking";
   }
+  if (raw === "JobOffered") {
+    return "Offering Job";
+  }
 
+  const lower = s.toLowerCase();
   if (lower.startsWith("busy")) {
-    if (lower.includes("cash"))    return "Picked up";
-    if (lower.includes("account")) return "Picked up";
     return "Busy";
   }
-  if (lower.includes("clear") || lower === "clear") return "Clear";
 
-  return s; // raw fallback
+  return s; // fallback
 }
 
 // Simple label for shift change driverStatus
@@ -327,7 +339,7 @@ function checkWebhookAuth(req, res) {
   return true;
 }
 
-// ---------- HackneyLocation: simple ping ----------
+// ---------- HackneyLocation: simple ping (no longer forces online) ----------
 app.post("/webhook/HackneyLocation", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
@@ -352,7 +364,7 @@ app.post("/webhook/HackneyLocation", (req, res) => {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        explicitOnline: true,
+        // NOTE: we do NOT change explicitOnline here
       };
 
       onlineMap.set(key, rec);
@@ -409,7 +421,7 @@ app.post("/webhook/Status", (req, res) => {
         updatedAt: ts,
         driverStatusCode: rawCode || existing.driverStatusCode || null,
         driverStatusLabel: label ?? existing.driverStatusLabel ?? rawCode ?? null,
-        explicitOnline: true,
+        explicitOnline: true, // tracking → definitely on/working
       };
       rec.driverStatus = rec.driverStatusLabel;
 
