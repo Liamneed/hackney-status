@@ -32,9 +32,9 @@ app.use(express.urlencoded({ extended: true }));
 /**
  * Store per callsign:
  *   {
- *     lastPingAt: ISO string,     // last ping (Status or HackneyLocation)
+ *     lastPingAt: ISO string,     // last ping (Status / ShiftChange / HackneyLocation)
  *     updatedAt: ISO string,      // last update time
- *     driverStatus: string | null // VehicleStatus string
+ *     driverStatus: string | null // status text or VehicleStatus string
  *   }
  *
  * Online is ALWAYS derived from lastPingAt + timeout.
@@ -80,7 +80,6 @@ function computeOnline(rec) {
   return age <= OFFLINE_TIMEOUT_MS;
 }
 
-// generic callsign extractor (used by HackneyLocation)
 function extractCallsignGeneric(obj) {
   const direct =
     obj?.callsign ??
@@ -102,6 +101,18 @@ function extractCallsignGeneric(obj) {
     v?.Callsign ?? v?.callsign ?? v?.callSign ??
     null
   );
+}
+
+// Generic helper to turn various payload shapes into an array
+function coercePayloadToArray(body) {
+  const b = body || {};
+  if (Array.isArray(b)) return b;
+  if (Array.isArray(b.data)) return b.data;
+  if (Array.isArray(b.items)) return b.items;
+  if (Array.isArray(b.VehicleTracks)) return b.VehicleTracks;
+  if (Array.isArray(b.Shifts)) return b.Shifts;
+  if (Array.isArray(b.Events)) return b.Events;
+  return [b];
 }
 
 // --- Static files
@@ -152,23 +163,23 @@ function sseBroadcastUpdate(callsign, rec) {
   }
 }
 
+// --- Webhook auth helper
+function checkWebhookAuth(req, res) {
+  if (!WEBHOOK_TOKEN) return true;
+  const provided = req.headers["x-webhook-token"];
+  if (provided !== WEBHOOK_TOKEN) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return false;
+  }
+  return true;
+}
+
 // --- Webhook: HackneyLocation (simple ping, no status)
 app.post("/webhook/HackneyLocation", (req, res) => {
   try {
-    if (WEBHOOK_TOKEN) {
-      const provided = req.headers["x-webhook-token"];
-      if (provided !== WEBHOOK_TOKEN) {
-        return res.status(401).json({ ok: false, error: "Unauthorized" });
-      }
-    }
+    if (!checkWebhookAuth(req, res)) return;
 
-    const body = req.body;
-    const items = Array.isArray(body)
-      ? body
-      : Array.isArray(body?.data)
-        ? body.data
-        : [body];
-
+    const items = coercePayloadToArray(req.body);
     let updates = 0;
     const nowIso = new Date().toISOString();
 
@@ -179,14 +190,14 @@ app.post("/webhook/HackneyLocation", (req, res) => {
       if (!cs) continue;
       const key = normKey(cs);
 
-      const ts = item?.Timestamp || item?.timestamp || item?.time || nowIso;
+      const ts = item.Timestamp || item.timestamp || item.time || nowIso;
 
       const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        // driverStatus unchanged here
+        // driverStatus unchanged here – pure location ping
       };
 
       onlineMap.set(key, rec);
@@ -209,24 +220,13 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 // --- Webhook: Status — VehicleTracksChanged (BUSY / CLEAR + ping)
 app.post("/webhook/Status", (req, res) => {
   try {
-    if (WEBHOOK_TOKEN) {
-      const provided = req.headers["x-webhook-token"];
-      if (provided !== WEBHOOK_TOKEN) {
-        return res.status(401).json({ ok: false, error: "Unauthorized" });
-      }
-    }
+    if (!checkWebhookAuth(req, res)) return;
 
     const body = req.body || {};
     // Autocab payload: { EventType: "VehicleTracksChanged", VehicleTracks: [ ... ] }
-    let tracks = [];
-
-    if (Array.isArray(body.VehicleTracks)) {
-      tracks = body.VehicleTracks;
-    } else if (Array.isArray(body.data)) {
-      tracks = body.data;
-    } else if (Array.isArray(body)) {
-      tracks = body;
-    }
+    const tracks = Array.isArray(body.VehicleTracks)
+      ? body.VehicleTracks
+      : coercePayloadToArray(body);
 
     let updates = 0;
 
@@ -247,8 +247,8 @@ app.post("/webhook/Status", (req, res) => {
       const key = normKey(cs);
       const ts  = track.Timestamp || track.timestamp || new Date().toISOString();
 
-      // This is the important part for you:
-      // set driverStatus from VehicleStatus EXACTLY as sent.
+      // This is the important part:
+      // set driverStatus from VehicleStatus EXACTLY as sent
       const rawStatus = track.VehicleStatus || track.vehicleStatus || null;
       const driverStatus = rawStatus ? String(rawStatus) : null;
 
@@ -273,6 +273,73 @@ app.post("/webhook/Status", (req, res) => {
     res.json({ ok: true, updates });
   } catch (e) {
     console.error("Status webhook error:", e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// --- Webhook: ShiftChange — treat as ping + log driver shift status
+app.post("/webhook/ShiftChange", (req, res) => {
+  try {
+    if (!checkWebhookAuth(req, res)) return;
+
+    const items = coercePayloadToArray(req.body);
+    let updates = 0;
+
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+
+      // Typical Autocab shift payloads usually contain Driver / Vehicle with Callsign
+      const vehicle = item.Vehicle || {};
+      const driver  = item.Driver  || {};
+      const cs =
+        vehicle.Callsign ||
+        driver.Callsign ||
+        extractCallsignGeneric(item) ||
+        null;
+
+      if (!cs) continue;
+      const key = normKey(cs);
+
+      const ts =
+        item.Timestamp ||
+        item.timestamp ||
+        item.ModifiedDate ||
+        item.EventTime ||
+        new Date().toISOString();
+
+      // Try to pull something shift-related as a status label
+      const rawStatus =
+        item.ShiftStatus ??
+        item.shiftStatus ??
+        item.Status ??
+        item.status ??
+        item.DriverStatus ??
+        item.driverStatus ??
+        null;
+
+      const statusText = rawStatus ? String(rawStatus) : null;
+
+      const existing = onlineMap.get(key) || {};
+      const rec = {
+        ...existing,
+        lastPingAt: ts,             // treat ShiftChange as a ping too
+        updatedAt: ts,
+        driverStatus: statusText ?? existing.driverStatus ?? null,
+      };
+
+      onlineMap.set(key, rec);
+      updates++;
+      sseBroadcastUpdate(key, rec);
+    }
+
+    if (updates > 0) {
+      saveStatusToDisk();
+      console.log(`ShiftChange webhook: updated ${updates} vehicles`);
+    }
+
+    res.json({ ok: true, updates });
+  } catch (e) {
+    console.error("ShiftChange webhook error:", e);
     res.status(400).json({ ok: false, error: e.message });
   }
 });
