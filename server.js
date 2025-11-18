@@ -33,7 +33,7 @@ app.use(express.urlencoded({ extended: true }));
  *   lastPingAt: ISO,
  *   updatedAt: ISO,
  *   driverStatus: string | null,  // from VehicleStatus or shift status
- *   explicitOnline: boolean|null  // hard override (ShiftChange)
+ *   explicitOnline: boolean|null  // hard override (ShiftChange / track)
  * }
  */
 let onlineMap = new Map();
@@ -95,9 +95,11 @@ const normKey = (s) => String(s || "").trim().toUpperCase();
 function computeOnline(rec) {
   if (!rec) return false;
 
-  // Hard override from ShiftChange (e.g. explicit offline)
+  // NEW: hard overrides from ShiftChange / Status
+  if (rec.explicitOnline === true)  return true;
   if (rec.explicitOnline === false) return false;
 
+  // Otherwise, fall back to lastPingAt timeout
   if (!rec.lastPingAt) return false;
   const t = new Date(rec.lastPingAt).getTime();
   if (!Number.isFinite(t)) return false;
@@ -105,7 +107,6 @@ function computeOnline(rec) {
   const age = Date.now() - t;
   if (age > OFFLINE_TIMEOUT_MS) return false;
 
-  // If ShiftChange said explicitOnline true, or just recent ping → online
   return true;
 }
 
@@ -144,36 +145,85 @@ function coercePayloadToArray(body) {
   return [b];
 }
 
-// VERY simple VehicleStatus → label for UI
+// VERY simple VehicleStatus → label
 function vehicleStatusLabel(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
   const lower = s.toLowerCase();
 
-  // Busy states
   if (lower.startsWith("busy")) {
     if (lower.includes("cash"))    return "Busy (Cash)";
     if (lower.includes("account")) return "Busy (Account)";
     return "Busy";
   }
-
-  // Clear / free
   if (lower.includes("clear") || lower.includes("free")) return "Clear";
 
-  // Queue / waiting / rank
-  if (lower.includes("queue")) return "Queued";
-  if (lower.includes("wait"))  return "Waiting";
-  if (lower.includes("rank"))  return "On Rank";
-
-  // Fallback: raw text from Autocab
-  return s;
+  return s; // raw fallback
 }
 
-// Infer explicit online/offline from ShiftChange strings
-function inferExplicitOnlineFromShift(rawStatus, eventType, subType) {
+// Simple label for shift change driverStatus
+function shiftStatusLabel(rawStatus, eventType, subType, item) {
   const s   = (rawStatus || "").toString().toLowerCase();
   const evt = (eventType || "").toString().toLowerCase();
   const sub = (subType || "").toString().toLowerCase();
+
+  // Boolean flags from payload
+  const onShiftBool =
+    typeof item?.IsOnShift === "boolean" ? item.IsOnShift :
+    typeof item?.OnShift   === "boolean" ? item.OnShift   :
+    typeof item?.onShift   === "boolean" ? item.onShift   :
+    null;
+
+  if (onShiftBool === true)  return "On Shift";
+  if (onShiftBool === false) return "Off Shift";
+
+  if (s.includes("break")) return "On Break";
+
+  if (
+    s.includes("start") ||
+    s.includes("on shift") ||
+    s.includes("logged in") ||
+    s.includes("loggedon") ||
+    s.includes("signed on") ||
+    evt.includes("shiftstart") ||
+    sub === "started"
+  ) {
+    return "On Shift";
+  }
+
+  if (
+    s.includes("end") ||
+    s.includes("off shift") ||
+    s.includes("logged out") ||
+    s.includes("loggedoff") ||
+    s.includes("signed off") ||
+    (s.includes("off") && !s.includes("offline status ignored")) ||
+    evt.includes("shiftend") ||
+    sub === "ended"
+  ) {
+    return "Off Shift";
+  }
+
+  // Fallback
+  if (rawStatus) return String(rawStatus);
+  if (evt)       return `Shift: ${eventType}`;
+  if (sub)       return `Shift: ${subType}`;
+  return null;
+}
+
+// Infer explicit online/offline from ShiftChange strings + flags
+function inferExplicitOnlineFromShift(rawStatus, eventType, subType, item) {
+  const s   = (rawStatus || "").toString().toLowerCase();
+  const evt = (eventType || "").toString().toLowerCase();
+  const sub = (subType || "").toString().toLowerCase();
+
+  // Boolean flags first
+  const onShiftBool =
+    typeof item?.IsOnShift === "boolean" ? item.IsOnShift :
+    typeof item?.OnShift   === "boolean" ? item.OnShift   :
+    typeof item?.onShift   === "boolean" ? item.onShift   :
+    null;
+  if (onShiftBool !== null) return onShiftBool;
 
   // ONLINE hints
   if (
@@ -403,22 +453,25 @@ app.post("/webhook/ShiftChange", (req, res) => {
       const eventType = item.EventType || item.Event || null;
       const subType   = item.SubEventType || item.subEventType || null;
 
-      const explicit = inferExplicitOnlineFromShift(rawStatus, eventType, subType);
+      const explicit = inferExplicitOnlineFromShift(rawStatus, eventType, subType, item);
+      const label    = shiftStatusLabel(rawStatus, eventType, subType, item);
 
       const existing = onlineMap.get(key) || {};
       let rec = {
         ...existing,
-        lastPingAt: ts,
         updatedAt: ts,
-        driverStatus: (rawStatus ? String(rawStatus) : existing.driverStatus) || null,
+        // only change lastPingAt if we explicitly know on/off
+        lastPingAt: existing.lastPingAt || null,
+        driverStatus: label ?? existing.driverStatus ?? null,
         explicitOnline: existing.explicitOnline ?? null,
       };
 
       if (explicit === true) {
         rec.explicitOnline = true;   // force online
+        rec.lastPingAt = ts;         // treat shift start as a fresh ping
       } else if (explicit === false) {
         rec.explicitOnline = false;  // force offline immediately
-        // no need to hack lastPingAt now; computeOnline() will see explicitOnline === false
+        rec.lastPingAt = null;       // let explicit flag control it
       }
 
       onlineMap.set(key, rec);
@@ -426,7 +479,7 @@ app.post("/webhook/ShiftChange", (req, res) => {
       broadcastStatus(key, rec);
 
       console.log(
-        `ShiftChange: ${key} ts=${ts} rawStatus=${rawStatus} explicitOnline=${rec.explicitOnline}`
+        `ShiftChange: callsign=${key} ts=${ts} rawStatus=${rawStatus} eventType=${eventType} subType=${subType} explicitOnline=${rec.explicitOnline} driverStatus=${rec.driverStatus}`
       );
     }
 
