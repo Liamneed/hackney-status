@@ -95,11 +95,25 @@ const normKey = (s) => String(s || "").trim().toUpperCase();
 function computeOnline(rec) {
   if (!rec) return false;
 
-  // NEW: hard overrides from ShiftChange / Status
-  if (rec.explicitOnline === true)  return true;
-  if (rec.explicitOnline === false) return false;
+  const statusLower = (rec.driverStatus || "").toString().toLowerCase();
 
-  // Otherwise, fall back to lastPingAt timeout
+  // 1) Anything that clearly looks like OFF SHIFT should always be offline
+  if (
+    statusLower.includes("off shift") ||
+    statusLower.includes("off-duty") ||
+    statusLower.includes("off duty") ||
+    statusLower.includes("logged off") ||
+    statusLower.includes("signed off") ||
+    statusLower.includes("not on shift")
+  ) {
+    return false;
+  }
+
+  // 2) Explicit overrides from ShiftChange / Status
+  if (rec.explicitOnline === false) return false;
+  if (rec.explicitOnline === true)  return true;
+
+  // 3) Otherwise, fall back to lastPingAt timeout
   if (!rec.lastPingAt) return false;
   const t = new Date(rec.lastPingAt).getTime();
   if (!Number.isFinite(t)) return false;
@@ -453,8 +467,21 @@ app.post("/webhook/ShiftChange", (req, res) => {
       const eventType = item.EventType || item.Event || null;
       const subType   = item.SubEventType || item.subEventType || null;
 
-      const explicit = inferExplicitOnlineFromShift(rawStatus, eventType, subType, item);
-      const label    = shiftStatusLabel(rawStatus, eventType, subType, item);
+      // Label used for UI
+      const label = shiftStatusLabel(rawStatus, eventType, subType, item);
+
+      // Try to infer explicit online flag
+      let explicit = inferExplicitOnlineFromShift(rawStatus, eventType, subType, item);
+
+      // If that didn't decide, also derive from the label text
+      if (explicit === null && label) {
+        const l = label.toLowerCase();
+        if (l.includes("off shift") || l.includes("off duty") || l.includes("logged off") || l.includes("signed off")) {
+          explicit = false;
+        } else if (l.includes("on shift") || l.includes("on duty") || l.includes("logged on") || l.includes("logged in") || l.includes("signed on")) {
+          explicit = true;
+        }
+      }
 
       const existing = onlineMap.get(key) || {};
       let rec = {
@@ -471,7 +498,7 @@ app.post("/webhook/ShiftChange", (req, res) => {
         rec.lastPingAt = ts;         // treat shift start as a fresh ping
       } else if (explicit === false) {
         rec.explicitOnline = false;  // force offline immediately
-        rec.lastPingAt = null;       // let explicit flag control it
+        rec.lastPingAt = null;       // let explicit flag + driverStatus control it
       }
 
       onlineMap.set(key, rec);
