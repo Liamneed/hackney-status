@@ -144,20 +144,29 @@ function coercePayloadToArray(body) {
   return [b];
 }
 
-// VERY simple VehicleStatus → label
+// VERY simple VehicleStatus → label for UI
 function vehicleStatusLabel(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
   const lower = s.toLowerCase();
 
+  // Busy states
   if (lower.startsWith("busy")) {
     if (lower.includes("cash"))    return "Busy (Cash)";
     if (lower.includes("account")) return "Busy (Account)";
     return "Busy";
   }
+
+  // Clear / free
   if (lower.includes("clear") || lower.includes("free")) return "Clear";
 
-  return s; // raw
+  // Queue / waiting / rank
+  if (lower.includes("queue")) return "Queued";
+  if (lower.includes("wait"))  return "Waiting";
+  if (lower.includes("rank"))  return "On Rank";
+
+  // Fallback: raw text from Autocab
+  return s;
 }
 
 // Infer explicit online/offline from ShiftChange strings
@@ -409,7 +418,7 @@ app.post("/webhook/ShiftChange", (req, res) => {
         rec.explicitOnline = true;   // force online
       } else if (explicit === false) {
         rec.explicitOnline = false;  // force offline immediately
-        rec.lastPingAt = "1970-01-01T00:00:00.000Z"; // make sure timeout logic doesn't keep it green
+        // no need to hack lastPingAt now; computeOnline() will see explicitOnline === false
       }
 
       onlineMap.set(key, rec);
