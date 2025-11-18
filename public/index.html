@@ -75,12 +75,9 @@
 
       <!-- Column headers (sticky under dynamic header) -->
       <div id="colHeader" class="mt-2 sticky z-30">
-        <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(110px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
-          <div>Callsign</div>
-          <div>Taxi Plate</div>
-          <div>Reg Plate</div>
-          <div>Driver Status</div>
-          <div class="text-right pr-1 sm:pr-0"><span class="sm:inline hidden">Online</span><span class="inline sm:hidden">●</span></div>
+        <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
+          <div>Callsign</div><div>Taxi Plate</div><div>Reg Plate</div>
+          <div class="text-right pr-1 sm:pr-0"><span class="sm:inline hidden">Status</span><span class="inline sm:hidden">●</span></div>
         </div>
       </div>
     </div>
@@ -111,8 +108,18 @@
     const applyRootPx = (px) => document.documentElement.style.fontSize = px + "px";
     let rootPx = Math.min(MAX_PX, Math.max(MIN_PX, Number(localStorage.getItem(ROOT_KEY) || 16)));
     applyRootPx(rootPx);
-    document.getElementById("fontSm").addEventListener("click", () => { rootPx = Math.max(MIN_PX, rootPx - 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); adjustStickyOffset(); });
-    document.getElementById("fontLg").addEventListener("click", () => { rootPx = Math.min(MAX_PX, rootPx + 1); applyRootPx(rootPx); localStorage.setItem(ROOT_KEY, rootPx); adjustStickyOffset(); });
+    document.getElementById("fontSm").addEventListener("click", () => {
+      rootPx = Math.max(MIN_PX, rootPx - 1);
+      applyRootPx(rootPx);
+      localStorage.setItem(ROOT_KEY, rootPx);
+      adjustStickyOffset();
+    });
+    document.getElementById("fontLg").addEventListener("click", () => {
+      rootPx = Math.min(MAX_PX, rootPx + 1);
+      applyRootPx(rootPx);
+      localStorage.setItem(ROOT_KEY, rootPx);
+      adjustStickyOffset();
+    });
 
     // ===== Dynamic sticky offset for column headers =====
     function adjustStickyOffset(){
@@ -199,7 +206,7 @@
     let onlineMap = new Map();
     let statusPollTimer = null;
 
-    // ===== STATUS helpers (fallback only) =====
+    // ===== STATUS helpers (fallback for generic data) =====
     function inferOnline(obj) {
       if (typeof obj?.online === "boolean") return obj.online;
       const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
@@ -210,6 +217,7 @@
       if (sub === "ended") return false;
       return null;
     }
+
     function extractCallsign(obj) {
       const direct = obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ?? obj?.vehicleCode ?? obj?.driverCode ?? null;
       if (direct) return direct;
@@ -217,18 +225,22 @@
       const v = obj?.Vehicle || obj?.vehicle || {};
       return d?.Callsign ?? d?.callsign ?? d?.callSign ?? v?.Callsign ?? v?.callsign ?? v?.callSign ?? null;
     }
+
     function buildOnlineMap(data) {
       const list = getList(data);
       const map = new Map();
       for (const item of list) {
         const cs = item?.callsign ?? extractCallsign(item);
         if (!cs) continue;
+
+        // Prefer explicit boolean from backend, else infer
         let online = null;
         if (typeof item?.online === "boolean") {
           online = item.online;
         } else {
           online = inferOnline(item);
         }
+
         map.set(normKey(cs), {
           online,
           updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
@@ -237,15 +249,16 @@
       }
       return map;
     }
-    const onlineFor        = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
-    const updatedFor       = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
-    const driverStatusFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
 
-    // ===== BADGE (simple ONLINE/OFFLINE) =====
+    const onlineFor       = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
+    const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
+
+    // ===== BADGE (simple ONLINE / OFFLINE) =====
     function badge(on, updatedAt) {
       const dot =
         on === true  ? 'bg-green-600' :
-        on === false ? 'bg-red-600' :
+        on === false ? 'bg-red-600'   :
                        'bg-neutral-400';
       const label =
         on === true  ? 'ONLINE' :
@@ -254,9 +267,11 @@
       const pill =
         on === null ? 'bg-neutral-400 text-white' :
         on ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
+
       const tt = updatedAt
         ? `Last update: ${new Date(updatedAt).toLocaleString()}`
         : 'No timestamp';
+
       return `
         <span class="inline-flex items-center gap-1 sm:gap-1.5" title="${tt}">
           <span class="size-2.5 rounded-full ${dot}" aria-hidden="true"></span>
@@ -294,7 +309,7 @@
 
       return `
         <div id="row-${normKey(cs)}"
-             class="relative grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(110px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(140px,auto)_110px] items-center gap-x-1 sm:gap-x-1.5 gap-y-0 px-3 sm:px-4 py-2.5 border-b last:border-b-0 border-neutral-100 dark:border-neutral-800 ${rowChrome(on)} ${highlight ? 'flash' : ''}">
+             class="relative grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] items-center gap-x-1 sm:gap-x-1.5 gap-y-0 px-3 sm:px-4 py-2.5 border-b last:border-b-0 border-neutral-100 dark:border-neutral-800 ${rowChrome(on)} ${highlight ? 'flash' : ''}">
           <div class="mono font-semibold text-[0.98rem] oneline">${cs || '(no)'}</div>
           <div class="oneline">
             <span class="mono inline-block text-[0.95rem] px-2 py-0.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">${plat}</span>
@@ -302,10 +317,10 @@
           <div class="oneline">
             <span class="mono inline-block font-semibold text-[0.95rem] px-2 py-0.5 rounded-md bg-yellow-400 text-black border border-yellow-500">${reg}</span>
           </div>
-          <div class="oneline text-xs sm:text-[0.8rem] text-neutral-700 dark:text-neutral-300">
-            ${ds}
-          </div>
-          <div class="justify-self-end pr-0 sm:pr-0" aria-label="Status">
+          <div class="justify-self-end pr-0 sm:pr-0 text-right" aria-label="Status">
+            <div class="oneline text-[0.7rem] sm:text-xs text-neutral-600 dark:text-neutral-300 mb-0.5">
+              ${ds}
+            </div>
             ${badge(on, ts)}
           </div>
         </div>
@@ -375,7 +390,10 @@
       render(changedKey);
     }
 
-    document.getElementById("refreshBtn").addEventListener("click", () => { fetchVehicles(); fetchOnline(); });
+    document.getElementById("refreshBtn").addEventListener("click", () => {
+      fetchVehicles();
+      fetchOnline();
+    });
     searchEl.addEventListener("input", () => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => applyFiltersAndRender(), 120);
@@ -431,7 +449,9 @@
         const data = await res.json();
         onlineMap = buildOnlineMap(data);
         applyFiltersAndRender(); // ensures counters update too
-      } catch (e) { /* ignore; SSE may cover it */ }
+      } catch (e) {
+        // ignore; SSE may cover it
+      }
     }
 
     // ===== LIVE UPDATES (SSE + fallback) =====
@@ -477,7 +497,9 @@
         });
 
         return true;
-      } catch { return false; }
+      } catch {
+        return false;
+      }
     }
 
     function startPollingFallback() {
@@ -487,12 +509,15 @@
 
     // ===== INIT =====
     setInterval(fetchVehicles, VEHICLE_REFRESH_MS);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchOnline(); });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) fetchOnline();
+    });
 
     (async () => {
       await fetchVehicles();
       const ok = wireSSE();
-      if (!ok) startPollingFallback(); else fetchOnline();
+      if (!ok) startPollingFallback();
+      else fetchOnline();
       adjustStickyOffset();
     })();
   </script>
