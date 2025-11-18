@@ -17,16 +17,15 @@
     .status-text--clear      { color: #16a34a; }      /* green */
     .status-text--dispatched { color: #ea580c; }      /* orange */
     .status-text--dispatched-acc { color: #a855f7; }  /* purple */
-    .status-text--pickedup-cash { color: #f97316; }   /* orange (busy cash) */
-    .status-text--pickedup-acc  { color: #c4b5fd; }   /* lighter purple */
+    .status-text--pickedup-cash { color: #f97316; }   /* orange */
+    .status-text--pickedup-acc  { color: #c4b5fd; }   /* light purple */
     .status-text--rank      { color: #2563eb; }       /* blue */
     .status-text--offering  {
-      color: #f9fafb;                                  /* white */
-      text-shadow: 0 0 3px rgba(0,0,0,0.9);           /* so it shows on light bg too */
+      color: #f9fafb;
+      text-shadow: 0 0 3px rgba(0,0,0,0.9);
     }
     .status-text--busy      { color: #fbbf24; }       /* generic busy */
     .status-text--unknown   { color: #6b7280; }       /* grey */
-
     .cell-status { text-align: right; }
     @media (max-width: 640px) {
       .cell-status { text-align: left; }
@@ -34,7 +33,6 @@
   </style>
 </head>
 <body>
-  <!-- HEADER -->
   <header id="appHeader" class="header">
     <div class="header-inner">
       <div class="brand-box">N</div>
@@ -45,12 +43,9 @@
         <button id="fontSm" class="btn-ghost" title="Smaller text">A−</button>
         <button id="fontLg" class="btn-ghost" title="Larger text">A+</button>
       </div>
-      <button id="refreshBtn" class="btn-outline">
-        Refresh
-      </button>
+      <button id="refreshBtn" class="btn-outline">Refresh</button>
     </div>
 
-    <!-- Controls -->
     <div class="header-controls">
       <div class="controls-row">
         <div class="search-box">
@@ -93,7 +88,6 @@
     </div>
   </header>
 
-  <!-- LIST -->
   <main class="main">
     <section class="card">
       <div id="rows" aria-live="polite"></div>
@@ -137,13 +131,6 @@
     const VEHICLE_REFRESH_MS = 60000;
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
-
-    const STALE_MS = 12 * 60 * 60 * 1000;
-    function isStale(updatedAt){
-      if (!updatedAt) return true;
-      const t = new Date(updatedAt).getTime();
-      return !Number.isFinite(t) || (Date.now() - t) > STALE_MS;
-    }
 
     const HL_KEY = "row-highlight-mode";
     const hlSelect = document.getElementById("hlSelect");
@@ -209,17 +196,6 @@
     let onlineMap = new Map();
     let statusPollTimer = null;
 
-    function inferOnline(obj) {
-      if (typeof obj?.online === "boolean") return obj.online;
-      const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
-      if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
-      if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
-      const sub = (obj?.SubEventType ?? obj?.subEventType ?? "").toString().toLowerCase();
-      if (sub === "started") return true;
-      if (sub === "ended") return false;
-      return null;
-    }
-
     function extractCallsign(obj) {
       const direct = obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ?? obj?.vehicleCode ?? obj?.driverCode ?? null;
       if (direct) return direct;
@@ -228,7 +204,7 @@
       return d?.Callsign ?? d?.callsign ?? d?.callSign ?? v?.Callsign ?? v?.callsign ?? v?.callSign ?? null;
     }
 
-    function extractDriverStatus(obj) {
+    function extractDriverStatusLabel(obj) {
       const raw =
         obj?.driverStatus ??
         obj?.driverStatusLabel ??
@@ -241,6 +217,7 @@
       return String(raw || "").trim();
     }
 
+    // Build map purely from server data (no guessing for online)
     function buildOnlineMap(data) {
       const list = getList(data);
       const map = new Map();
@@ -248,32 +225,24 @@
         const cs = item?.callsign ?? extractCallsign(item);
         if (!cs) continue;
 
-        let online = null;
-        if (typeof item?.online === "boolean") {
-          online = item.online;
-        } else {
-          online = inferOnline(item);
-        }
-
-        const dsLabel = extractDriverStatus(item);
+        const key = normKey(cs);
+        const online = (typeof item?.online === "boolean") ? item.online : false;
+        const dsLabel = extractDriverStatusLabel(item);
         const dsCode  = item?.driverStatusCode || null;
 
-        // default to Not Working if we know nothing
-        if (!online && !dsLabel && !dsCode) {
-          map.set(normKey(cs), {
-            online: false,
-            updatedAt: item?.updatedAt || null,
-            driverStatusLabel: "Not Working",
-            driverStatusCode: "NotWorking",
-          });
-          continue;
+        let label = dsLabel;
+        let code  = dsCode;
+
+        if (!online && !label && !code) {
+          label = "Not Working";
+          code  = "NotWorking";
         }
 
-        map.set(normKey(cs), {
-          online: online,
+        map.set(key, {
+          online,
           updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
-          driverStatusLabel: dsLabel || null,
-          driverStatusCode: dsCode || null,
+          driverStatusLabel: label || null,
+          driverStatusCode: code || null,
         });
       }
       return map;
@@ -281,21 +250,19 @@
 
     const onlineFor       = (cs) => {
       const rec = onlineMap.get(normKey(cs));
-      if (!rec) return null;
-      return rec.online;
+      if (!rec) return false;
+      return !!rec.online;
     };
     const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
     const driverStatusLabelFor = (cs) => onlineMap.get(normKey(cs))?.driverStatusLabel || null;
     const driverStatusCodeFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatusCode || null;
 
-    // Map code/label → coloured text
     function mapDriverStatus(rawCode, rawLabel) {
       const code = (rawCode || "").toString().trim();
       const label = (rawLabel || "").toString().trim();
       const lowerCode = code.toLowerCase();
       const lowerLabel = label.toLowerCase();
 
-      // strong map by code first
       if (code === "NotWorking") {
         return { text: "Not Working", cls: "status-text--notworking" };
       }
@@ -321,11 +288,7 @@
         return { text: "Offering Job", cls: "status-text--offering" };
       }
 
-      // no code – infer from label text (for ShiftChange etc.)
-      if (!code && !label) {
-        return { text: "Not Working", cls: "status-text--notworking" };
-      }
-
+      // infer from label (for cases where only text is sent)
       if (!code) {
         if (
           lowerLabel.includes("off shift") ||
@@ -339,12 +302,18 @@
         if (lowerLabel === "clear") {
           return { text: "Clear", cls: "status-text--clear" };
         }
+        if (lowerLabel.includes("offer")) {
+          return { text: "Offering Job", cls: "status-text--offering" };
+        }
         if (lowerLabel.startsWith("busy")) {
           return { text: "Busy", cls: "status-text--busy" };
         }
       }
 
-      // fallback – show whatever we have
+      if (!code && !label) {
+        return { text: "Not Working", cls: "status-text--notworking" };
+      }
+
       const text = label || code || "Unknown";
       return { text, cls: "status-text--unknown" };
     }
