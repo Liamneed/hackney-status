@@ -75,9 +75,22 @@
 
       <!-- Column headers (sticky under dynamic header) -->
       <div id="colHeader" class="mt-2 sticky z-30">
-        <div class="grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-400 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur border-b border-neutral-200 dark:border-neutral-800">
-          <div>Callsign</div><div>Taxi Plate</div><div>Reg Plate</div>
-          <div class="text-right pr-1 sm:pr-0"><span class="sm:inline hidden">Status</span><span class="inline sm:hidden">●</span></div>
+        <div
+          class="grid
+                 [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(80px,auto)_40px]
+                 sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(120px,auto)_80px]
+                 gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide
+                 text-neutral-600 dark:text-neutral-400
+                 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur
+                 border-b border-neutral-200 dark:border-neutral-800">
+          <div>Callsign</div>
+          <div>Taxi Plate</div>
+          <div>Reg Plate</div>
+          <div>Driver Status</div>
+          <div class="text-right pr-1 sm:pr-0">
+            <span class="sm:inline hidden">Status</span>
+            <span class="inline sm:hidden">●</span>
+          </div>
         </div>
       </div>
     </div>
@@ -138,7 +151,7 @@
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
 
-    // ===== STALENESS (show last-known after restart) =====
+    // ===== STALENESS (unchanged logic) =====
     const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
     function isStale(updatedAt){
       if (!updatedAt) return true;
@@ -147,14 +160,14 @@
     }
 
     // ===== HIGHLIGHT MODE (persist) =====
-    const HL_KEY = "row-highlight-mode"; // 'none' | 'border' | 'background'
+    const HL_KEY = "row-highlight-mode";
     const hlSelect = document.getElementById("hlSelect");
     let highlightMode = localStorage.getItem(HL_KEY) || "background";
     hlSelect.value = highlightMode;
     hlSelect.addEventListener("change", () => {
       highlightMode = hlSelect.value;
       localStorage.setItem(HL_KEY, highlightMode);
-      render(); // re-render with new mode
+      render();
     });
 
     // ===== HELPERS =====
@@ -210,6 +223,7 @@
 
     let baseMaster = [];
     let master = [];
+    // onlineMap: key -> { online, updatedAt, driverStatus }
     let onlineMap = new Map();
     let statusPollTimer = null;
 
@@ -237,35 +251,42 @@
       const list = getList(data);
       const map = new Map();
       for (const item of list) {
-        const cs = extractCallsign(item);
+        const cs = item?.callsign ?? extractCallsign(item);
         if (!cs) continue;
-        const online = inferOnline(item);
+
+        let online = null;
+        if (typeof item?.online === "boolean") {
+          online = item.online;
+        } else {
+          online = inferOnline(item);
+        }
         if (online === null) continue;
+
         map.set(normKey(cs), {
           online,
-          updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null
+          updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
+          driverStatus: item?.driverStatus ?? item?.statusText ?? null,
         });
       }
       return map;
     }
-    
-    const onlineFor  = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
-    const updatedFor = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
 
-    // ===== BADGE (with staleness) =====
+    const onlineFor        = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const updatedFor       = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
+    const driverStatusFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
+
+    // ===== BADGE (ONLINE / OFFLINE) =====
     function badge(on, updatedAt) {
-      const stale = isStale(updatedAt);
       const dot =
-        on === true  ? (stale ? 'bg-amber-500' : 'bg-green-600') :
-        on === false ? (stale ? 'bg-amber-500' : 'bg-red-600') :
+        on === true  ? 'bg-green-600' :
+        on === false ? 'bg-red-600'   :
                        'bg-neutral-400';
       const label =
-        on === true  ? (stale ? 'STALE ONLINE'  : 'ONLINE') :
-        on === false ? (stale ? 'STALE OFFLINE' : 'OFFLINE') :
+        on === true  ? 'ONLINE' :
+        on === false ? 'OFFLINE' :
                        '—';
       const pill =
         on === null ? 'bg-neutral-400 text-white' :
-        stale       ? 'bg-amber-500 text-black' :
         on ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
       const tt = updatedAt
         ? `Last update: ${new Date(updatedAt).toLocaleString()}`
@@ -303,16 +324,26 @@
       const reg  = getReg(v)      || "—";
       const on   = onlineFor(cs);
       const ts   = updatedFor(cs);
+      const ds   = driverStatusFor(cs) || "—";
 
       return `
         <div id="row-${normKey(cs)}"
-             class="relative grid [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_28px] sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_110px] items-center gap-x-1 sm:gap-x-1.5 gap-y-0 px-3 sm:px-4 py-2.5 border-b last:border-b-0 border-neutral-100 dark:border-neutral-800 ${rowChrome(on)} ${highlight ? 'flash' : ''}">
+             class="relative grid
+                    [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(80px,auto)_40px]
+                    sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(120px,auto)_80px]
+                    items-center gap-x-1 sm:gap-x-1.5 gap-y-0
+                    px-3 sm:px-4 py-2.5 border-b last:border-b-0
+                    border-neutral-100 dark:border-neutral-800
+                    ${rowChrome(on)} ${highlight ? 'flash' : ''}">
           <div class="mono font-semibold text-[0.98rem] oneline">${cs || '(no)'}</div>
           <div class="oneline">
             <span class="mono inline-block text-[0.95rem] px-2 py-0.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">${plat}</span>
           </div>
           <div class="oneline">
             <span class="mono inline-block font-semibold text-[0.95rem] px-2 py-0.5 rounded-md bg-yellow-400 text-black border border-yellow-500">${reg}</span>
+          </div>
+          <div class="oneline text-[0.7rem] sm:text-xs text-neutral-700 dark:text-neutral-200">
+            ${ds}
           </div>
           <div class="justify-self-end pr-0 sm:pr-0" aria-label="Status">
             ${badge(on, ts)}
@@ -370,7 +401,7 @@
 
       master = arr;
 
-      // Update live counters — based on the displayed rows only
+      // Counters
       const onlineCount  = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === true  ? 1 : 0), 0);
       const offlineCount = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === false ? 1 : 0), 0);
       const total = arr.length;
@@ -404,7 +435,6 @@
         const data = await res.json();
         const list = getList(data);
 
-        // Build a deduped list by normalized callsign (fallback to reg/plate)
         const seen = new Map();
         for (const v of list) {
           if (!isActive(v) || !hasHackneyCapability(v)) continue;
@@ -422,7 +452,6 @@
           if (!seen.has(key)) {
             seen.set(key, obj);
           } else {
-            // Prefer entries that have a callsign if duplicate
             const prev = seen.get(key);
             if (!prev.callsign && obj.callsign) seen.set(key, obj);
           }
@@ -442,8 +471,10 @@
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         const data = await res.json();
         onlineMap = buildOnlineMap(data);
-        applyFiltersAndRender(); // ensures counters update too
-      } catch (e) { /* ignore; SSE may cover it */ }
+        applyFiltersAndRender();
+      } catch (e) {
+        // ignore; SSE may cover it
+      }
     }
 
     // ===== LIVE UPDATES (SSE + fallback) =====
@@ -451,7 +482,7 @@
       if (!("EventSource" in window)) return false;
       try {
         const es = new EventSource(SSE_URL);
-        es.addEventListener("open", () => { /* connected */ });
+        es.addEventListener("open", () => {});
         es.addEventListener("error", () => {
           if (!document.hidden) startPollingFallback();
         });
@@ -461,7 +492,12 @@
             const payload = JSON.parse(evt.data);
             const m = new Map();
             for (const item of (payload?.data || [])) {
-              m.set(normKey(item.callsign), { online: !!item.online, updatedAt: item.updatedAt || null });
+              if (!item?.callsign) continue;
+              m.set(normKey(item.callsign), {
+                online: !!item.online,
+                updatedAt: item.updatedAt || null,
+                driverStatus: item.driverStatus || null,
+              });
             }
             onlineMap = m;
             applyFiltersAndRender();
@@ -474,13 +510,20 @@
             if (!p?.callsign) return;
             const key = normKey(p.callsign);
             const prev = onlineMap.get(key)?.online;
-            onlineMap.set(key, { online: !!p.online, updatedAt: p.updatedAt || null });
+            const prevStatus = onlineMap.get(key)?.driverStatus || null;
+            onlineMap.set(key, {
+              online: !!p.online,
+              updatedAt: p.updatedAt || null,
+              driverStatus: p.driverStatus ?? prevStatus,
+            });
             applyFiltersAndRender(prev !== p.online ? key : null);
           } catch {}
         });
 
         return true;
-      } catch { return false; }
+      } catch {
+        return false;
+      }
     }
 
     function startPollingFallback() {
