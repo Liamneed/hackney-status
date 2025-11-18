@@ -122,12 +122,13 @@
     });
 
     // ===== Dynamic sticky offset for column headers =====
+    const w = window;
     function adjustStickyOffset(){
       const h = document.getElementById("appHeader")?.offsetHeight || 60;
       const ch = document.getElementById("colHeader");
       if (ch) ch.style.top = `${h}px`;
     }
-    window.addEventListener("resize", adjustStickyOffset);
+    w.addEventListener("resize", adjustStickyOffset);
     document.addEventListener("DOMContentLoaded", adjustStickyOffset);
 
     // ===== CONFIG =====
@@ -137,6 +138,14 @@
     const VEHICLE_REFRESH_MS = 60000;
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
+
+    // ===== STALENESS (show last-known after restart) =====
+    const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
+    function isStale(updatedAt){
+      if (!updatedAt) return true;
+      const t = new Date(updatedAt).getTime();
+      return !Number.isFinite(t) || (Date.now() - t) > STALE_MS;
+    }
 
     // ===== HIGHLIGHT MODE (persist) =====
     const HL_KEY = "row-highlight-mode"; // 'none' | 'border' | 'background'
@@ -230,27 +239,28 @@
       const list = getList(data);
       const map = new Map();
       for (const item of list) {
-        const cs = item?.callsign ?? extractCallsign(item);
+        const cs = extractCallsign(item);
         if (!cs) continue;
 
+        // Prefer explicit boolean from backend, else infer from generic fields
         let online = null;
         if (typeof item?.online === "boolean") {
           online = item.online;
         } else {
           online = inferOnline(item);
         }
+        if (online === null) continue;
 
         map.set(normKey(cs), {
           online,
           updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
-          driverStatus: item?.driverStatus ?? null,
+          driverStatus: item?.driverStatus ?? item?.statusText ?? null,
         });
       }
       return map;
     }
-
-    const onlineFor       = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
-    const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
+    const onlineFor  = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const updatedFor = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
     const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
 
     // ===== BADGE (simple ONLINE / OFFLINE) =====
@@ -266,11 +276,9 @@
       const pill =
         on === null ? 'bg-neutral-400 text-white' :
         on ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
-
       const tt = updatedAt
         ? `Last update: ${new Date(updatedAt).toLocaleString()}`
         : 'No timestamp';
-
       return `
         <span class="inline-flex items-center gap-1 sm:gap-1.5" title="${tt}">
           <span class="size-2.5 rounded-full ${dot}" aria-hidden="true"></span>
@@ -304,7 +312,6 @@
       const reg  = getReg(v)      || "—";
       const on   = onlineFor(cs);
       const ts   = updatedFor(cs);
-      const ds   = driverStatusFor(cs) || "—";
 
       return `
         <div id="row-${normKey(cs)}"
@@ -318,7 +325,7 @@
           </div>
           <div class="justify-self-end pr-0 sm:pr-0 text-right" aria-label="Status">
             <div class="oneline text-[0.7rem] sm:text-xs text-neutral-600 dark:text-neutral-300 mb-0.5">
-              ${ds}
+              ${driverStatusFor(cs) || "—"}
             </div>
             ${badge(on, ts)}
           </div>
@@ -389,7 +396,7 @@
       render(changedKey);
     }
 
-    document.getElementById("refreshBtn").addEventListener("click", () => {
+    refreshBtn.addEventListener("click", () => {
       fetchVehicles();
       fetchOnline();
     });
@@ -468,7 +475,6 @@
             const payload = JSON.parse(evt.data);
             const m = new Map();
             for (const item of (payload?.data || [])) {
-              if (!item?.callsign) continue;
               m.set(normKey(item.callsign), {
                 online: !!item.online,
                 updatedAt: item.updatedAt || null,
@@ -486,10 +492,11 @@
             if (!p?.callsign) return;
             const key = normKey(p.callsign);
             const prev = onlineMap.get(key)?.online;
+            const prevStatus = onlineMap.get(key)?.driverStatus || null;
             onlineMap.set(key, {
               online: !!p.online,
               updatedAt: p.updatedAt || null,
-              driverStatus: p.driverStatus || null,
+              driverStatus: p.driverStatus ?? prevStatus,
             });
             applyFiltersAndRender(prev !== p.online ? key : null);
           } catch {}
@@ -508,15 +515,12 @@
 
     // ===== INIT =====
     setInterval(fetchVehicles, VEHICLE_REFRESH_MS);
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) fetchOnline();
-    });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchOnline(); });
 
     (async () => {
       await fetchVehicles();
       const ok = wireSSE();
-      if (!ok) startPollingFallback();
-      else fetchOnline();
+      if (!ok) startPollingFallback(); else fetchOnline();
       adjustStickyOffset();
     })();
   </script>
