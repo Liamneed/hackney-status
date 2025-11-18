@@ -34,10 +34,11 @@ app.use(express.urlencoded({ extended: true }));
  *   {
  *     lastPingAt: ISO string,     // last ping (Status / ShiftChange / HackneyLocation)
  *     updatedAt: ISO string,      // last update time
- *     driverStatus: string | null // status text or VehicleStatus string
+ *     driverStatus: string | null,// "Busy (Cash)" / "Busy (Account)" / "Clear" / etc.
+ *     explicitOnline: boolean|null// hard override from ShiftChange (true/false)
  *   }
  *
- * Online is ALWAYS derived from lastPingAt + timeout.
+ * Online is derived from lastPingAt + timeout, PLUS explicitOnline if set.
  */
 let onlineMap = new Map();
 
@@ -72,12 +73,29 @@ loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
+/**
+ * Compute effective online:
+ *  1. If explicitOnline === false → always OFFLINE (dot red).
+ *  2. If no lastPingAt → OFFLINE.
+ *  3. If lastPingAt older than timeout → OFFLINE.
+ *  4. If explicitOnline === true → ONLINE.
+ *  5. Else, recent ping and no explicit flag → ONLINE.
+ */
 function computeOnline(rec) {
-  if (!rec || !rec.lastPingAt) return false;
+  if (!rec) return false;
+
+  if (rec.explicitOnline === false) return false;
+
+  if (!rec.lastPingAt) return false;
   const t = new Date(rec.lastPingAt).getTime();
   if (!Number.isFinite(t)) return false;
+
   const age = Date.now() - t;
-  return age <= OFFLINE_TIMEOUT_MS;
+  if (age > OFFLINE_TIMEOUT_MS) return false;
+
+  if (rec.explicitOnline === true) return true;
+
+  return true;
 }
 
 function extractCallsignGeneric(obj) {
@@ -113,6 +131,51 @@ function coercePayloadToArray(body) {
   if (Array.isArray(b.Shifts)) return b.Shifts;
   if (Array.isArray(b.Events)) return b.Events;
   return [b];
+}
+
+// Map VehicleStatus to human-friendly text
+function mapVehicleStatus(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const lower = s.toLowerCase();
+
+  if (lower.startsWith("busy")) {
+    if (lower.includes("account")) return "Busy (Account)";
+    if (lower.includes("cash"))    return "Busy (Cash)";
+    return "Busy";
+  }
+
+  if (lower.includes("clear") || lower.includes("free")) return "Clear";
+
+  // fallback to raw string
+  return s;
+}
+
+// Infer explicitOnline from ShiftChange status strings
+function inferOnlineFromShift(statusText, subType, eventType) {
+  const s = (statusText || "").toString().toLowerCase();
+  const sub = (subType || "").toString().toLowerCase();
+  const evt = (eventType || "").toString().toLowerCase();
+
+  // online-ish words
+  if (
+    s.includes("start") || s.includes("on") || s.includes("open") ||
+    s.includes("logged in") || s.includes("loggedon") || s.includes("signed on") ||
+    sub === "started" || evt.includes("shiftstart")
+  ) {
+    return true;
+  }
+
+  // offline-ish words
+  if (
+    s.includes("end") || s.includes("off") || s.includes("closed") ||
+    s.includes("logged out") || s.includes("loggedoff") || s.includes("signed off") ||
+    sub === "ended" || evt.includes("shiftend")
+  ) {
+    return false;
+  }
+
+  return null;
 }
 
 // --- Static files
@@ -197,7 +260,8 @@ app.post("/webhook/HackneyLocation", (req, res) => {
         ...existing,
         lastPingAt: ts,
         updatedAt: ts,
-        // driverStatus unchanged here – pure location ping
+        // location ping strongly suggests online
+        explicitOnline: existing.explicitOnline ?? true,
       };
 
       onlineMap.set(key, rec);
@@ -247,17 +311,17 @@ app.post("/webhook/Status", (req, res) => {
       const key = normKey(cs);
       const ts  = track.Timestamp || track.timestamp || new Date().toISOString();
 
-      // This is the important part:
-      // set driverStatus from VehicleStatus EXACTLY as sent
-      const rawStatus = track.VehicleStatus || track.vehicleStatus || null;
-      const driverStatus = rawStatus ? String(rawStatus) : null;
+      const rawStatus  = track.VehicleStatus || track.vehicleStatus || null;
+      const pretty     = mapVehicleStatus(rawStatus);
 
       const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
         lastPingAt: ts,              // treat this as a ping
         updatedAt: ts,
-        driverStatus: driverStatus ?? existing.driverStatus ?? null,
+        driverStatus: pretty ?? existing.driverStatus ?? null,
+        // on a job → definitely online
+        explicitOnline: true,
       };
 
       onlineMap.set(key, rec);
@@ -277,7 +341,7 @@ app.post("/webhook/Status", (req, res) => {
   }
 });
 
-// --- Webhook: ShiftChange — treat as ping + log driver shift status
+// --- Webhook: ShiftChange — logon/logoff, treat as ping + explicit online/offline
 app.post("/webhook/ShiftChange", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
@@ -288,7 +352,6 @@ app.post("/webhook/ShiftChange", (req, res) => {
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
 
-      // Typical Autocab shift payloads usually contain Driver / Vehicle with Callsign
       const vehicle = item.Vehicle || {};
       const driver  = item.Driver  || {};
       const cs =
@@ -307,7 +370,6 @@ app.post("/webhook/ShiftChange", (req, res) => {
         item.EventTime ||
         new Date().toISOString();
 
-      // Try to pull something shift-related as a status label
       const rawStatus =
         item.ShiftStatus ??
         item.shiftStatus ??
@@ -317,19 +379,27 @@ app.post("/webhook/ShiftChange", (req, res) => {
         item.driverStatus ??
         null;
 
-      const statusText = rawStatus ? String(rawStatus) : null;
+      const eventType = item.EventType || item.Event || null;
+      const subType   = item.SubEventType || item.subEventType || null;
+
+      const explicit = inferOnlineFromShift(rawStatus, subType, eventType);
 
       const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
-        lastPingAt: ts,             // treat ShiftChange as a ping too
+        lastPingAt: ts,             // treat ShiftChange as activity
         updatedAt: ts,
-        driverStatus: statusText ?? existing.driverStatus ?? null,
+        driverStatus: (rawStatus ? String(rawStatus) : existing.driverStatus) || null,
+        explicitOnline: explicit !== null ? explicit : existing.explicitOnline ?? null,
       };
 
       onlineMap.set(key, rec);
       updates++;
       sseBroadcastUpdate(key, rec);
+
+      console.log(
+        `ShiftChange: ${key} ts=${ts} rawStatus=${rawStatus} explicitOnline=${rec.explicitOnline}`
+      );
     }
 
     if (updates > 0) {
