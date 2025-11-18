@@ -193,7 +193,7 @@
 
     let baseMaster = [];
     let master = [];
-    // onlineMap: key -> { online, updatedAt, lastPingAt, driverStatus }
+    // onlineMap: key -> { online, updatedAt, driverStatus }
     let onlineMap = new Map();
     let statusPollTimer = null;
 
@@ -227,18 +227,6 @@
         obj?.availability ??
         "";
       return String(raw || "").trim();
-    }
-
-    function computeEffectiveOnline(rec) {
-      if (!rec) return null;
-      if (rec.lastPingAt) {
-        const t = new Date(rec.lastPingAt).getTime();
-        if (Number.isFinite(t) && Date.now() - t > (Number(process.env?.PING_TIMEOUT_MINUTES || 5) * 60 * 1000 || 5 * 60 * 1000)) {
-          return false;
-        }
-      }
-      if (typeof rec.online === "boolean") return rec.online;
-      return null;
     }
 
     function buildOnlineMap(data) {
@@ -277,9 +265,10 @@
 
     // ===== BADGE (dot only) =====
     function badge(on, updatedAt) {
+      const stale = isStale(updatedAt);
       const dotClass =
-        on === true  ? "dot dot-online" :
-        on === false ? "dot dot-offline" :
+        on === true  ? (stale ? "dot dot-online-stale" : "dot dot-online") :
+        on === false ? (stale ? "dot dot-offline-stale" : "dot dot-offline") :
                        "dot dot-unknown";
       const tt = updatedAt
         ? "Last update: " + new Date(updatedAt).toLocaleString()
@@ -290,16 +279,16 @@
     // ===== ROW chrome =====
     function rowChrome(on){
       if (highlightMode === "background") {
-        if (on === true)  return "row row-bg-online";
-        if (on === false) return "row row-bg-offline";
-        return "row row-bg-neutral";
+        if (on === true)  return "table-row row-bg-online";
+        if (on === false) return "table-row row-bg-offline";
+        return "table-row row-bg-neutral";
       }
       if (highlightMode === "border") {
-        if (on === true)  return "row row-border-online";
-        if (on === false) return "row row-border-offline";
-        return "row row-border-neutral";
+        if (on === true)  return "table-row row-border-online";
+        if (on === false) return "table-row row-border-offline";
+        return "table-row row-border-neutral";
       }
-      return "row";
+      return "table-row";
     }
 
     // ===== ROW =====
@@ -483,14 +472,17 @@
             const p = JSON.parse(evt.data);
             if (!p?.callsign) return;
             const key = normKey(p.callsign);
-            const prev = onlineMap.get(key)?.online;
-            const prevStatus = onlineMap.get(key)?.driverStatus || null;
+            const prevRec = onlineMap.get(key) || {};
+            const prevOnline  = prevRec.online;
+            const prevStatus  = prevRec.driverStatus || null;
+
             onlineMap.set(key, {
               online: !!p.online,
               updatedAt: p.updatedAt || null,
               driverStatus: p.driverStatus ?? prevStatus,
             });
-            applyFiltersAndRender(prev !== p.online ? key : null);
+
+            applyFiltersAndRender(prevOnline !== p.online ? key : null);
           } catch {}
         });
 
