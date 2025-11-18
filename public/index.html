@@ -5,65 +5,53 @@
   <title>Active Hackneys — Callsign · Plate · Reg · Status</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .sticky-top{position:sticky;top:0;z-index:40}
-    .touch{touch-action:manipulation}
-    .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    @keyframes rowFlash{0%{background:transparent}40%{background:rgba(250,204,21,.25)}100%{background:transparent}}
-    .flash{animation:rowFlash .6s ease-out}
-    @media (prefers-reduced-motion: reduce){ .flash { animation: none !important; } }
-  </style>
+  <link rel="stylesheet" href="hackney.css" />
 </head>
-<body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-50">
+<body>
   <!-- HEADER -->
-  <header id="appHeader" class="sticky-top border-b border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 backdrop-blur">
-    <div class="max-w-5xl mx-auto px-3 py-2.5 flex items-center gap-2">
-      <div class="size-8 rounded-md bg-black text-yellow-400 grid place-items-center font-bold select-none">N</div>
-      <div class="flex-1 min-w-0">
-        <h1 class="text-base sm:text-lg font-semibold leading-tight oneline">Active Hackney Drivers</h1>
+  <header id="appHeader" class="header">
+    <div class="header-inner">
+      <div class="brand-box">N</div>
+      <div class="header-title-wrap">
+        <h1 class="header-title">Active Hackney Drivers</h1>
       </div>
-      <div class="flex items-center gap-1">
-        <button id="fontSm" class="touch px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 text-xs" title="Smaller text">A−</button>
-        <button id="fontLg" class="touch px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 text-xs" title="Larger text">A+</button>
+      <div class="font-buttons">
+        <button id="fontSm" class="btn-ghost" title="Smaller text">A−</button>
+        <button id="fontLg" class="btn-ghost" title="Larger text">A+</button>
       </div>
-      <button id="refreshBtn" class="touch text-xs sm:text-sm px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800">
+      <button id="refreshBtn" class="btn-outline">
         Refresh
       </button>
     </div>
 
     <!-- Controls -->
-    <div class="max-w-5xl mx-auto px-3 pb-2">
-      <div class="flex flex-wrap items-center gap-2">
+    <div class="header-controls">
+      <div class="controls-row">
         <!-- Search -->
-        <div class="flex-1 min-w-[220px] flex items-center gap-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2.5">
-          <svg aria-hidden="true" class="size-4 text-neutral-500"><use href="#ico-search"/></svg>
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
           <input id="searchInput" type="search" inputmode="search"
                  placeholder="Search callsign, taxi plate or reg…"
-                 class="w-full bg-transparent py-1.5 text-[0.95rem] focus:outline-none" />
+                 class="search-input" />
         </div>
 
         <!-- Filter by Status -->
-        <select id="statusFilter"
-          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+        <select id="statusFilter" class="control-select">
           <option value="all">Show: All</option>
           <option value="online">Online only</option>
           <option value="offline">Offline only</option>
         </select>
 
         <!-- Sort -->
-        <select id="sortSelect"
-          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+        <select id="sortSelect" class="control-select">
           <option value="callsign">Sort: Callsign</option>
           <option value="plateNumber">Sort: Plate</option>
           <option value="registration">Sort: Registration</option>
         </select>
 
         <!-- Row highlight mode -->
-        <label class="text-xs text-neutral-600 dark:text-neutral-400 ml-auto">Row highlight</label>
-        <select id="hlSelect"
-          class="rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm">
+        <label class="control-label">Row highlight</label>
+        <select id="hlSelect" class="control-select">
           <option value="none">None</option>
           <option value="border">Border</option>
           <option value="background" selected>Background</option>
@@ -71,49 +59,32 @@
       </div>
 
       <!-- Status counters -->
-      <div id="statusCounts" class="mt-1 text-xs sm:text-sm text-neutral-600 dark:text-neutral-400"></div>
+      <div id="statusCounts" class="status-counts"></div>
 
-      <!-- Column headers (sticky under dynamic header) -->
-      <div id="colHeader" class="mt-2 sticky z-30">
-        <div
-          class="grid
-                 [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(80px,auto)_40px]
-                 sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(120px,auto)_80px]
-                 gap-x-1 sm:gap-x-1.5 gap-y-0 px-1 py-1 text-[11px] uppercase tracking-wide
-                 text-neutral-600 dark:text-neutral-400
-                 bg-neutral-50/90 dark:bg-neutral-900/90 backdrop-blur
-                 border-b border-neutral-200 dark:border-neutral-800">
+      <!-- Column headers -->
+      <div id="colHeader" class="table-header-wrap">
+        <div class="table-row table-header">
           <div>Callsign</div>
           <div>Taxi Plate</div>
           <div>Reg Plate</div>
           <div>Driver Status</div>
-          <div class="text-right pr-1 sm:pr-0">
-            <span class="sm:inline hidden">Status</span>
-            <span class="inline sm:hidden">●</span>
-          </div>
+          <div class="text-right">Status</div>
         </div>
       </div>
     </div>
   </header>
 
   <!-- LIST -->
-  <main class="max-w-5xl mx-auto px-2 sm:px-3 py-2.5">
-    <section class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+  <main class="main">
+    <section class="card">
       <div id="rows" aria-live="polite"></div>
-      <div id="skeleton" class="divide-y divide-neutral-100 dark:divide-neutral-800">
-        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
-        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
-        <div class="h-12 bg-neutral-100/60 dark:bg-neutral-800/60"></div>
+      <div id="skeleton" class="skeleton">
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
       </div>
     </section>
   </main>
-
-  <!-- Icons -->
-  <svg width="0" height="0" class="hidden">
-    <symbol id="ico-search" viewBox="0 0 24 24">
-      <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.471 6.471 0 0 0 1.57-5.34C15.53 5.59 13.21 3 10.26 3S5 5.59 5 8.39c0 2.8 2.32 5.39 5.26 5.39 1.61 0 3.06-.64 4.1-1.66l.27.28v.8l4.25 4.24c.41.41 1.07.41 1.48 0s.41-1.07 0-1.48L15.5 14Zm-5.24 0C8.02 14 6 11.97 6 9.39S8.02 4.78 10.26 4.78s4.26 2.02 4.26 4.61-2.02 4.61-4.26 4.61Z"/>
-    </symbol>
-  </svg>
 
   <script>
     // ===== Root font size (A− / A+) =====
@@ -138,7 +109,7 @@
     function adjustStickyOffset(){
       const h = document.getElementById("appHeader")?.offsetHeight || 60;
       const ch = document.getElementById("colHeader");
-      if (ch) ch.style.top = `${h}px`;
+      if (ch) ch.style.top = h + "px";
     }
     window.addEventListener("resize", adjustStickyOffset);
     document.addEventListener("DOMContentLoaded", adjustStickyOffset);
@@ -151,7 +122,6 @@
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
 
-    // ===== STALENESS (unchanged logic) =====
     const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
     function isStale(updatedAt){
       if (!updatedAt) return true;
@@ -159,7 +129,7 @@
       return !Number.isFinite(t) || (Date.now() - t) > STALE_MS;
     }
 
-    // ===== HIGHLIGHT MODE (persist) =====
+    // ===== HIGHLIGHT MODE =====
     const HL_KEY = "row-highlight-mode";
     const hlSelect = document.getElementById("hlSelect");
     let highlightMode = localStorage.getItem(HL_KEY) || "background";
@@ -271,50 +241,48 @@
       return map;
     }
 
-    const onlineFor        = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
-    const updatedFor       = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
-    const driverStatusFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
+    const onlineFor       = (cs) => onlineMap.get(normKey(cs))?.online ?? null;
+    const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
+    const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
 
-    // ===== BADGE (ONLINE / OFFLINE) =====
+    // ===== BADGE =====
     function badge(on, updatedAt) {
-      const dot =
-        on === true  ? 'bg-green-600' :
-        on === false ? 'bg-red-600'   :
-                       'bg-neutral-400';
+      const dotClass =
+        on === true  ? "dot dot-online" :
+        on === false ? "dot dot-offline" :
+                       "dot dot-unknown";
       const label =
-        on === true  ? 'ONLINE' :
-        on === false ? 'OFFLINE' :
-                       '—';
-      const pill =
-        on === null ? 'bg-neutral-400 text-white' :
-        on ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
+        on === true  ? "ONLINE" :
+        on === false ? "OFFLINE" : "—";
+      const pillClass =
+        on === null ? "status-pill pill-unknown" :
+        on ? "status-pill pill-online" : "status-pill pill-offline";
       const tt = updatedAt
-        ? `Last update: ${new Date(updatedAt).toLocaleString()}`
-        : 'No timestamp';
+        ? "Last update: " + new Date(updatedAt).toLocaleString()
+        : "No timestamp";
       return `
-        <span class="inline-flex items-center gap-1 sm:gap-1.5" title="${tt}">
-          <span class="size-2.5 rounded-full ${dot}" aria-hidden="true"></span>
-          <span class="hidden sm:inline text-xs px-2 py-0.5 rounded-md ${pill}">
+        <span class="badge-wrap" title="${tt}">
+          <span class="${dotClass}" aria-hidden="true"></span>
+          <span class="${pillClass}">
             ${label}
           </span>
         </span>
       `;
     }
 
-    // ===== ROW classes =====
+    // ===== ROW chrome =====
     function rowChrome(on){
       if (highlightMode === "background") {
-        if (on === true)  return "bg-green-50 dark:bg-green-950/30";
-        if (on === false) return "bg-red-50 dark:bg-red-950/30";
-        return "bg-neutral-50/40 dark:bg-neutral-900";
+        if (on === true)  return "row row-bg-online";
+        if (on === false) return "row row-bg-offline";
+        return "row row-bg-neutral";
       }
       if (highlightMode === "border") {
-        const bar = on === true ? "before:bg-green-600"
-                 : on === false ? "before:bg-red-600"
-                 : "before:bg-neutral-400";
-        return `before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${bar}`;
+        if (on === true)  return "row row-border-online";
+        if (on === false) return "row row-border-offline";
+        return "row row-border-neutral";
       }
-      return "";
+      return "row";
     }
 
     // ===== ROW =====
@@ -326,26 +294,19 @@
       const ts   = updatedFor(cs);
       const ds   = driverStatusFor(cs) || "—";
 
+      const rowClass = rowChrome(on) + (highlight ? " row-flash" : "");
+
       return `
-        <div id="row-${normKey(cs)}"
-             class="relative grid
-                    [grid-template-columns:82px_minmax(118px,1fr)_minmax(98px,auto)_minmax(80px,auto)_40px]
-                    sm:[grid-template-columns:96px_minmax(160px,1fr)_minmax(140px,auto)_minmax(120px,auto)_80px]
-                    items-center gap-x-1 sm:gap-x-1.5 gap-y-0
-                    px-3 sm:px-4 py-2.5 border-b last:border-b-0
-                    border-neutral-100 dark:border-neutral-800
-                    ${rowChrome(on)} ${highlight ? 'flash' : ''}">
-          <div class="mono font-semibold text-[0.98rem] oneline">${cs || '(no)'}</div>
-          <div class="oneline">
-            <span class="mono inline-block text-[0.95rem] px-2 py-0.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">${plat}</span>
+        <div id="row-${normKey(cs)}" class="${rowClass}">
+          <div class="cell mono strong">${cs || "(no)"}</div>
+          <div class="cell">
+            <span class="pill-muted mono">${plat}</span>
           </div>
-          <div class="oneline">
-            <span class="mono inline-block font-semibold text-[0.95rem] px-2 py-0.5 rounded-md bg-yellow-400 text-black border border-yellow-500">${reg}</span>
+          <div class="cell">
+            <span class="pill-reg mono strong">${reg}</span>
           </div>
-          <div class="oneline text-[0.7rem] sm:text-xs text-neutral-700 dark:text-neutral-200">
-            ${ds}
-          </div>
-          <div class="justify-self-end pr-0 sm:pr-0" aria-label="Status">
+          <div class="cell driver-status-text">${ds}</div>
+          <div class="cell text-right">
             ${badge(on, ts)}
           </div>
         </div>
@@ -354,7 +315,7 @@
 
     function render(changedKey=null) {
       if (!master.length) {
-        rowsEl.innerHTML = `<div class="p-4 text-sm text-neutral-600 dark:text-neutral-300">No vehicles to display.</div>`;
+        rowsEl.innerHTML = '<div class="empty-state">No vehicles to display.</div>';
         skeletonEl.classList.add("hidden");
         return;
       }
@@ -382,7 +343,6 @@
         });
       }
 
-      // Filter by Online/Offline
       const filterMode = statusFilterEl.value;
       if (filterMode !== "all") {
         arr = arr.filter(v => {
@@ -393,7 +353,6 @@
         });
       }
 
-      // Sort
       const mode = sortEl.value;
       if (mode === "plateNumber") arr.sort((a,b) => compare(a,b,getPlate));
       else if (mode === "registration") arr.sort((a,b) => compare(a,b,getReg));
@@ -401,16 +360,14 @@
 
       master = arr;
 
-      // Counters
       const onlineCount  = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === true  ? 1 : 0), 0);
       const offlineCount = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === false ? 1 : 0), 0);
       const total = arr.length;
 
-      statusCountsEl.innerHTML = `
-        🟢 Online: <b>${onlineCount}</b>&nbsp;&nbsp;
-        🔴 Offline: <b>${offlineCount}</b>&nbsp;&nbsp;
-        ⚪ Total: <b>${total}</b>
-      `;
+      statusCountsEl.innerHTML =
+        '🟢 Online: <b>' + onlineCount + '</b>&nbsp;&nbsp;' +
+        '🔴 Offline: <b>' + offlineCount + '</b>&nbsp;&nbsp;' +
+        '⚪ Total: <b>' + total + '</b>';
 
       render(changedKey);
     }
@@ -431,7 +388,7 @@
       try {
         skeletonEl.classList.remove("hidden");
         const res = await fetch(API_VEHICLES, { headers: { "Cache-Control": "no-cache" }});
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        if (!res.ok) throw new Error("HTTP " + res.status + " " + res.statusText);
         const data = await res.json();
         const list = getList(data);
 
@@ -461,14 +418,14 @@
         applyFiltersAndRender();
       } catch (e) {
         skeletonEl.classList.add("hidden");
-        rowsEl.innerHTML = `<div class="p-4 text-sm text-red-600 dark:text-red-400">Failed to load vehicles: ${e.message}</div>`;
+        rowsEl.innerHTML = '<div class="error-text">Failed to load vehicles: ' + e.message + '</div>';
       }
     }
 
     async function fetchOnline() {
       try {
         const res = await fetch(ONLINE_URL, { headers: { "Cache-Control":"no-cache" }});
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        if (!res.ok) throw new Error("HTTP " + res.status + " " + res.statusText);
         const data = await res.json();
         onlineMap = buildOnlineMap(data);
         applyFiltersAndRender();
