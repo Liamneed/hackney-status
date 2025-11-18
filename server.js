@@ -38,6 +38,27 @@ app.use(express.urlencoded({ extended: true }));
  */
 let onlineMap = new Map();
 
+// --- DEBUG: store last webhook payloads ---
+let lastHackneyLocationPayload = null;
+let lastStatusPayload = null;
+let lastShiftChangePayload = null;
+
+// helper to safely log truncated JSON to prevent log spam/crash
+function debugLog(label, payload) {
+  console.log(`\n===== ${label} @ ${new Date().toISOString()} =====`);
+  try {
+    const str = JSON.stringify(payload, null, 2);
+    if (str.length > 5000) {
+      console.log(str.substring(0, 5000) + " ... [TRUNCATED]");
+    } else {
+      console.log(str);
+    }
+  } catch (err) {
+    console.log("Could not stringify payload:", err.message);
+    console.log(payload);
+  }
+}
+
 // ---------- Persistence ----------
 function loadStatusFromDisk() {
   try {
@@ -163,7 +184,7 @@ function inferExplicitOnlineFromShift(rawStatus, eventType, subType) {
     s.includes("logged out") ||
     s.includes("loggedoff") ||
     s.includes("signed off") ||
-    s.includes("off") && !s.includes("offline status ignored") ||
+    (s.includes("off") && !s.includes("offline status ignored")) ||
     evt.includes("shiftend") ||
     sub === "ended"
   ) return false;
@@ -228,6 +249,10 @@ app.post("/webhook/HackneyLocation", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
 
+    // DEBUG
+    lastHackneyLocationPayload = req.body;
+    debugLog("WEBHOOK HIT: HackneyLocation", req.body);
+
     const items = coercePayloadToArray(req.body);
     let updates = 0;
     const nowIso = new Date().toISOString();
@@ -266,6 +291,10 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 app.post("/webhook/Status", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
+
+    // DEBUG
+    lastStatusPayload = req.body;
+    debugLog("WEBHOOK HIT: Status / VehicleTracks", req.body);
 
     const body = req.body || {};
     const tracks = Array.isArray(body.VehicleTracks)
@@ -323,6 +352,10 @@ app.post("/webhook/Status", (req, res) => {
 app.post("/webhook/ShiftChange", (req, res) => {
   try {
     if (!checkWebhookAuth(req, res)) return;
+
+    // DEBUG
+    lastShiftChangePayload = req.body;
+    debugLog("WEBHOOK HIT: ShiftChange", req.body);
 
     const items = coercePayloadToArray(req.body);
     let updates = 0;
@@ -398,6 +431,31 @@ app.post("/webhook/ShiftChange", (req, res) => {
     console.error("ShiftChange webhook error:", e);
     res.status(400).json({ ok: false, error: e.message });
   }
+});
+
+// ---------- DEBUG INSPECTION ENDPOINTS ----------
+app.get("/debug/last-hackney", (_req, res) => {
+  res.json({
+    received: !!lastHackneyLocationPayload,
+    timestamp: new Date().toISOString(),
+    payload: lastHackneyLocationPayload,
+  });
+});
+
+app.get("/debug/last-status", (_req, res) => {
+  res.json({
+    received: !!lastStatusPayload,
+    timestamp: new Date().toISOString(),
+    payload: lastStatusPayload,
+  });
+});
+
+app.get("/debug/last-shiftchange", (_req, res) => {
+  res.json({
+    received: !!lastShiftChangePayload,
+    timestamp: new Date().toISOString(),
+    payload: lastShiftChangePayload,
+  });
 });
 
 // ---------- Public API ----------
