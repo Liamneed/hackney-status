@@ -206,7 +206,7 @@
     let onlineMap = new Map();
     let statusPollTimer = null;
 
-    // ===== STATUS helpers (fallback for generic data) =====
+    // ===== STATUS helpers (fallback) =====
     function inferOnline(obj) {
       if (typeof obj?.online === "boolean") return obj.online;
       const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
@@ -233,7 +233,6 @@
         const cs = item?.callsign ?? extractCallsign(item);
         if (!cs) continue;
 
-        // Prefer explicit boolean from backend, else infer
         let online = null;
         if (typeof item?.online === "boolean") {
           online = item.online;
