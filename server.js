@@ -19,13 +19,27 @@ const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN || "";
 // Use a persistent disk on Render, e.g. set STATUS_FILE=/data/status.json
 const STATUS_FILE = process.env.STATUS_FILE || "./status.json";
 
+// How long until we force a vehicle offline if we hear nothing (from ANY webhook)
+const OFFLINE_AFTER_MINUTES = Number(process.env.OFFLINE_AFTER_MINUTES || 8);
+const OFFLINE_AFTER_MS = OFFLINE_AFTER_MINUTES * 60 * 1000;
+
 // --- Middleware
 app.set("trust proxy", 1);
 app.use(cors()); // tighten with origin: [] if desired
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// --- In-memory store: callsign -> { online: boolean, updatedAt: ISO }
+/**
+ * Each record in onlineMap is:
+ * {
+ *   online: boolean,
+ *   updatedAt: ISO string,
+ *   lastPingAt: ISO string | null,
+ *   lastLocationAt: ISO string | null,
+ *   lastStatusAt: ISO string | null,
+ *   driverStatus: string | null
+ * }
+ */
 let onlineMap = new Map();
 
 // --- Persist to disk (debounced)
@@ -33,7 +47,20 @@ function loadStatusFromDisk() {
   try {
     if (fs.existsSync(STATUS_FILE)) {
       const raw = JSON.parse(fs.readFileSync(STATUS_FILE, "utf8"));
-      onlineMap = new Map(raw.map(([k, v]) => [k, v]));
+      onlineMap = new Map(
+        raw.map(([k, v]) => {
+          // Backwards-compat for old simple shape { online, updatedAt }
+          const rec = {
+            online: !!v.online,
+            updatedAt: v.updatedAt || new Date().toISOString(),
+            lastPingAt: v.lastPingAt || v.updatedAt || null,
+            lastLocationAt: v.lastLocationAt || null,
+            lastStatusAt: v.lastStatusAt || null,
+            driverStatus: v.driverStatus || null,
+          };
+          return [k, rec];
+        })
+      );
       console.log(`Loaded ${onlineMap.size} status records from ${STATUS_FILE}.`);
     } else {
       console.log(`No ${STATUS_FILE} found; starting fresh.`);
@@ -62,23 +89,36 @@ const normKey = (s) => String(s || "").trim().toUpperCase();
 // --- Extractors / inference
 function extractCallsign(obj) {
   const direct =
-    obj?.callsign ?? obj?.callSign ?? obj?.code ?? obj?.mdtId ?? obj?.mdtID ??
-    obj?.vehicleCode ?? obj?.driverCode ?? null;
+    obj?.callsign ??
+    obj?.callSign ??
+    obj?.code ??
+    obj?.mdtId ??
+    obj?.mdtID ??
+    obj?.vehicleCode ??
+    obj?.driverCode ??
+    null;
   if (direct) return direct;
 
   const d = obj?.Driver || obj?.driver || {};
   const v = obj?.Vehicle || obj?.vehicle || {};
   return (
-    d?.Callsign ?? d?.callsign ?? d?.callSign ??
-    v?.Callsign ?? v?.callsign ?? v?.callSign ?? null
+    d?.Callsign ??
+    d?.callsign ??
+    d?.callSign ??
+    v?.Callsign ??
+    v?.callsign ??
+    v?.callSign ??
+    null
   );
 }
 
+// Generic inference used for legacy ShiftChange etc.
 function inferOnline(obj) {
   if (typeof obj?.online === "boolean") return obj.online;
 
   const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "")
-    .toString().toLowerCase();
+    .toString()
+    .toLowerCase();
   if (["on","online","active","started","loggedin","open","available","true","1"].includes(s)) return true;
   if (["off","offline","inactive","ended","loggedout","closed","unavailable","false","0"].includes(s)) return false;
 
@@ -101,6 +141,44 @@ function inferOnline(obj) {
   return null;
 }
 
+// More opinionated inference specifically for driver "Status" webhook
+function inferOnlineFromDriverStatus(statusStr) {
+  if (!statusStr) return null;
+  const s = statusStr.toString().toLowerCase();
+
+  // Treat "clear", "busy", "on job" etc as ONLINE
+  const onlineKeywords = [
+    "clear",
+    "busy",
+    "onjob",
+    "on job",
+    "prebooked",
+    "pre-booked",
+    "stacked",
+    "allocation",
+    "working",
+    "available"
+  ];
+  if (onlineKeywords.some((k) => s.includes(k))) return true;
+
+  // Treat explicit offline/off shift states as OFFLINE
+  const offlineKeywords = [
+    "offline",
+    "off shift",
+    "offshift",
+    "no pda",
+    "nopda",
+    "logged off",
+    "logoff",
+    "log off",
+    "off-duty",
+    "off duty"
+  ];
+  if (offlineKeywords.some((k) => s.includes(k))) return false;
+
+  return null;
+}
+
 function coercePayloadToArray(body) {
   let b = body;
   if (typeof b === "string") {
@@ -111,6 +189,68 @@ function coercePayloadToArray(body) {
   if (Array.isArray(b?.payload)) return b.payload;
   if (b == null || b === "") return [];
   return [b];
+}
+
+// Ensure a record exists
+function getOrCreateRecord(key) {
+  const nowIso = new Date().toISOString();
+  const existing = onlineMap.get(key);
+  if (existing) return existing;
+  const rec = {
+    online: false,
+    updatedAt: nowIso,
+    lastPingAt: null,
+    lastLocationAt: null,
+    lastStatusAt: null,
+    driverStatus: null,
+  };
+  onlineMap.set(key, rec);
+  return rec;
+}
+
+// When we get a ping, update the timestamps and maybe online flag
+function updatePing(rec, { kind, ts, driverStatus, onlineHint }) {
+  const t = ts || new Date().toISOString();
+  rec.updatedAt = t;
+
+  if (kind === "location") {
+    rec.lastLocationAt = t;
+  }
+  if (kind === "status") {
+    rec.lastStatusAt = t;
+  }
+
+  // lastPingAt = most recent of both
+  const lastLoc = rec.lastLocationAt ? new Date(rec.lastLocationAt).getTime() : 0;
+  const lastStat = rec.lastStatusAt ? new Date(rec.lastStatusAt).getTime() : 0;
+  const latest = Math.max(lastLoc, lastStat, new Date(t).getTime());
+  rec.lastPingAt = new Date(latest).toISOString();
+
+  if (driverStatus !== undefined) {
+    rec.driverStatus = driverStatus;
+  }
+
+  // If webhook provides a clear online/offline hint, apply it
+  if (typeof onlineHint === "boolean") {
+    rec.online = onlineHint;
+  } else {
+    // If we get *any* ping and nothing is saying offline, assume online
+    if (rec.online === false) {
+      rec.online = true;
+    }
+  }
+}
+
+// Force offline if no pings for OFFLINE_AFTER_MINUTES
+function applyOfflineTimeout(rec) {
+  if (!rec.lastPingAt) {
+    rec.online = false;
+    return;
+  }
+  const age = Date.now() - new Date(rec.lastPingAt).getTime();
+  if (age > OFFLINE_AFTER_MS) {
+    rec.online = false;
+  }
 }
 
 // --- Static FIRST (UI)
@@ -126,7 +266,10 @@ app.get("/api/status/stream", (req, res) => {
   res.flushHeaders?.();
 
   const snapshot = Array.from(onlineMap.entries()).map(([k, v]) => ({
-    callsign: k, online: !!v.online, updatedAt: v.updatedAt || null
+    callsign: k,
+    online: !!v.online,
+    updatedAt: v.updatedAt || null,
+    driverStatus: v.driverStatus || null,
   }));
   res.write(`event: snapshot\ndata:${JSON.stringify({ data: snapshot })}\n\n`);
 
@@ -149,16 +292,124 @@ function sseBroadcast(event, payload) {
   }
 }
 
-// --- Webhook
-app.post("/webhook/ShiftChange", (req, res) => {
+// --- Webhook auth helper
+function checkWebhookAuth(req, res) {
+  if (!WEBHOOK_TOKEN) return true; // auth disabled
+  const provided = req.headers["x-webhook-token"];
+  if (provided !== WEBHOOK_TOKEN) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+// --- HackneyLocation webhook (location pings)
+// Live Autocab config: https://hackney.needacabapis.co.uk/webhook/HackneyLocation
+app.post("/webhook/HackneyLocation", (req, res) => {
+  if (!checkWebhookAuth(req, res)) return;
+
   try {
-    if (WEBHOOK_TOKEN) {
-      const provided = req.headers["x-webhook-token"];
-      if (provided !== WEBHOOK_TOKEN) {
-        return res.status(401).json({ ok: false, error: "Unauthorized" });
-      }
+    const items = coercePayloadToArray(req.body);
+    let updates = 0;
+
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const cs = extractCallsign(item);
+      if (!cs) { console.log("[HackneyLocation] No callsign in item", item); continue; }
+
+      const key = normKey(cs);
+      const rec = getOrCreateRecord(key);
+      const ts = item?.ModifiedDate || item?.updatedAt || item?.timestamp || new Date().toISOString();
+
+      // Location ping => treat as online (unless Status says otherwise later)
+      updatePing(rec, { kind: "location", ts, onlineHint: true });
+
+      applyOfflineTimeout(rec); // just in case clocks are weird
+      onlineMap.set(key, rec);
+      updates++;
+
+      console.log(`[HackneyLocation] ${key} ping @ ${rec.lastLocationAt} -> online=${rec.online}`);
+      sseBroadcast("status", {
+        callsign: key,
+        online: rec.online,
+        updatedAt: rec.updatedAt,
+        driverStatus: rec.driverStatus || null,
+      });
     }
 
+    if (updates > 0) saveStatusToDisk();
+    res.status(200).json({ ok: true, updates });
+  } catch (e) {
+    console.error("HackneyLocation handler error:", e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// --- Status webhook (driver status: clear, busy etc.)
+// Live Autocab config: https://hackney.needacabapis.co.uk/webhook/Status
+app.post("/webhook/Status", (req, res) => {
+  if (!checkWebhookAuth(req, res)) return;
+
+  try {
+    const items = coercePayloadToArray(req.body);
+    let updates = 0;
+
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const cs = extractCallsign(item);
+      if (!cs) { console.log("[Status] No callsign in item", item); continue; }
+
+      const key = normKey(cs);
+      const rec = getOrCreateRecord(key);
+      const ts = item?.ModifiedDate || item?.updatedAt || item?.timestamp || new Date().toISOString();
+
+      const rawStatus =
+        item?.Status ??
+        item?.status ??
+        item?.DriverStatus ??
+        item?.driverStatus ??
+        null;
+
+      const onlineFromDriver = inferOnlineFromDriverStatus(rawStatus);
+      const onlineGeneric = inferOnline(item);
+      const onlineHint = onlineFromDriver !== null ? onlineFromDriver : onlineGeneric;
+
+      updatePing(rec, {
+        kind: "status",
+        ts,
+        driverStatus: rawStatus != null ? String(rawStatus) : rec.driverStatus,
+        onlineHint,
+      });
+
+      applyOfflineTimeout(rec);
+      onlineMap.set(key, rec);
+      updates++;
+
+      console.log(
+        `[Status] ${key} -> online=${rec.online}, driverStatus=${rec.driverStatus}, lastPingAt=${rec.lastPingAt}`
+      );
+
+      sseBroadcast("status", {
+        callsign: key,
+        online: rec.online,
+        updatedAt: rec.updatedAt,
+        driverStatus: rec.driverStatus || null,
+      });
+    }
+
+    if (updates > 0) saveStatusToDisk();
+    res.status(200).json({ ok: true, updates });
+  } catch (e) {
+    console.error("Status handler error:", e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// --- Legacy ShiftChange webhook (optional, keep if anything still points at it)
+app.post("/webhook/ShiftChange", (req, res) => {
+  if (!checkWebhookAuth(req, res)) return;
+
+  try {
     const items = coercePayloadToArray(req.body);
     let updates = 0;
 
@@ -166,20 +417,26 @@ app.post("/webhook/ShiftChange", (req, res) => {
       if (!item || typeof item !== "object") continue;
 
       const cs = extractCallsign(item);
-      const online = inferOnline(item);
-      if (!cs) { console.log("No callsign in item", item); continue; }
-      if (online === null) { console.log(`Cannot infer online for ${cs}`, item); continue; }
+      const onlineHint = inferOnline(item);
+      if (!cs) { console.log("[ShiftChange] No callsign in item", item); continue; }
+      if (onlineHint === null) { console.log(`[ShiftChange] Cannot infer online for ${cs}`, item); continue; }
 
-      const rec = {
-        online,
-        updatedAt: item?.ModifiedDate || item?.updatedAt || item?.timestamp || new Date().toISOString(),
-      };
+      const key = normKey(cs);
+      const rec = getOrCreateRecord(key);
+      const ts = item?.ModifiedDate || item?.updatedAt || item?.timestamp || new Date().toISOString();
 
-      onlineMap.set(normKey(cs), rec);
+      updatePing(rec, { kind: "status", ts, onlineHint });
+      applyOfflineTimeout(rec);
+      onlineMap.set(key, rec);
       updates++;
 
-      console.log(`Status set: ${cs} -> ${online ? "ONLINE" : "OFFLINE"} @ ${rec.updatedAt}`);
-      sseBroadcast("status", { callsign: normKey(cs), ...rec });
+      console.log(`[ShiftChange] ${key} -> online=${rec.online} @ ${rec.updatedAt}`);
+      sseBroadcast("status", {
+        callsign: key,
+        online: rec.online,
+        updatedAt: rec.updatedAt,
+        driverStatus: rec.driverStatus || null,
+      });
     }
 
     if (updates > 0) saveStatusToDisk();
@@ -190,10 +447,38 @@ app.post("/webhook/ShiftChange", (req, res) => {
   }
 });
 
+// --- Background sweep: force offline after timeout ---
+setInterval(() => {
+  const now = Date.now();
+  let changed = 0;
+
+  for (const [key, rec] of onlineMap.entries()) {
+    const before = rec.online;
+    applyOfflineTimeout(rec);
+    if (rec.online !== before) {
+      rec.updatedAt = new Date(now).toISOString();
+      onlineMap.set(key, rec);
+      changed++;
+      console.log(`[SWEEP] ${key} -> online=${rec.online}`);
+      sseBroadcast("status", {
+        callsign: key,
+        online: rec.online,
+        updatedAt: rec.updatedAt,
+        driverStatus: rec.driverStatus || null,
+      });
+    }
+  }
+
+  if (changed > 0) saveStatusToDisk();
+}, 60 * 1000);
+
 // --- Read endpoints
 app.get("/api/status", (_req, res) => {
   const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
-    callsign: k, online: !!v.online, updatedAt: v.updatedAt || null,
+    callsign: k,
+    online: !!v.online,
+    updatedAt: v.updatedAt || null,
+    driverStatus: v.driverStatus || null,
   }));
   res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
 });
@@ -231,4 +516,5 @@ process.on("SIGINT",  () => { try { saveStatusToDisk(); } finally { process.exit
 // --- Start
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`Offline timeout: ${OFFLINE_AFTER_MINUTES} minutes with no pings.`);
 });
