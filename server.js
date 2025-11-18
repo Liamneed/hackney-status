@@ -20,7 +20,8 @@ const WEBHOOK_TOKEN  = process.env.WEBHOOK_TOKEN || "";
 const STATUS_FILE    = process.env.STATUS_FILE || "./status.json";
 
 // minutes before a vehicle is considered offline if no activity
-const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 5);
+// (default 15 mins now, env can override)
+const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 15);
 const OFFLINE_TIMEOUT_MS   = PING_TIMEOUT_MINUTES * 60 * 1000;
 
 // --- Middleware
@@ -32,12 +33,14 @@ app.use(express.urlencoded({ extended: true }));
 /**
  * Store:
  *  callsign -> {
- *    online: boolean | null,     // last explicit online/offline we saw
  *    updatedAt: ISO string,      // last updated (any source)
  *    lastPingAt: ISO string,     // last HackneyLocation ping
  *    lastStatusAt: ISO string,   // last Status webhook hit
  *    driverStatus: string | null // clear / busy / etc.
  *  }
+ *
+ * NOTE: we deliberately DO NOT persist any "online" boolean.
+ * Online/offline is always derived from timestamps.
  */
 let onlineMap = new Map();
 
@@ -108,36 +111,13 @@ function extractCallsign(obj) {
   );
 }
 
-// Interpret Autocab-ish online/offline from status webhook
-function inferOnlineFromStatus(obj) {
-  if (typeof obj?.online === "boolean") return obj.online;
-
-  const s = (
-    obj?.status ??
-    obj?.Status ??
-    obj?.shift ??
-    obj?.state ??
-    obj?.State ??
-    obj?.availability ??
-    obj?.Availability ??
-    ""
-  ).toString().toLowerCase();
-
-  if (["on", "online", "active", "started", "loggedin", "open", "available", "true", "1", "clear"].includes(s)) return true;
-  if (["off", "offline", "inactive", "ended", "loggedout", "closed", "unavailable", "false", "0"].includes(s)) return false;
-
-  const sub = (obj?.SubEventType ?? obj?.subEventType ?? "").toString().toLowerCase();
-  if (sub === "started") return true;
-  if (sub === "ended")  return false;
-
-  return null;
-}
-
 // friendly text for driver status column
 function extractDriverStatus(obj) {
   const candidates = [
     obj?.driverStatus,
     obj?.DriverStatus,
+    obj?.driverStatusName,
+    obj?.DriverStatusName,
     obj?.statusText,
     obj?.StatusText,
     obj?.stateText,
@@ -166,34 +146,20 @@ function extractDriverStatus(obj) {
 
 /**
  * Effective online:
- * 1. If we have explicit online === false, it's OFFLINE.
- * 2. Else, if lastSeen (ping or status) is older than timeout, OFFLINE.
- * 3. Else, if explicit online === true, ONLINE.
- * 4. Else, null (unknown).
+ *  ONLINE  if last activity (ping or status) < timeout
+ *  OFFLINE otherwise
  */
 function computeEffectiveOnline(rec) {
   if (!rec) return null;
 
-  // 1. explicit offline wins
-  if (rec.online === false) return false;
-
-  // last time we saw *anything*
   const iso = rec.lastPingAt || rec.lastStatusAt || rec.updatedAt;
-  if (iso) {
-    const t = new Date(iso).getTime();
-    if (Number.isFinite(t)) {
-      const age = Date.now() - t;
-      if (age > OFFLINE_TIMEOUT_MS) {
-        return false;
-      }
-    }
-  }
+  if (!iso) return null;
 
-  // 3. explicit online
-  if (rec.online === true) return true;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
 
-  // 4. don't know
-  return null;
+  const age = Date.now() - t;
+  return age <= OFFLINE_TIMEOUT_MS;
 }
 
 // --- Static files
@@ -265,7 +231,6 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 
       const rec = {
         ...existing,
-        online: true,                          // ping always means "seen alive"
         lastPingAt: item?.timestamp || item?.time || nowIso,
         updatedAt: nowIso,
       };
@@ -316,19 +281,19 @@ app.post("/webhook/Status", (req, res) => {
 
       const existing = onlineMap.get(key) || {};
       const driverStatus = extractDriverStatus(item);
-      const inferredOnline = inferOnlineFromStatus(item);
+
+      const ts =
+        item?.ModifiedDate ||
+        item?.updatedAt ||
+        item?.timestamp ||
+        nowIso;
 
       const rec = {
         ...existing,
-        updatedAt: item?.ModifiedDate || item?.updatedAt || item?.timestamp || existing.updatedAt || nowIso,
-        lastStatusAt: item?.ModifiedDate || item?.updatedAt || item?.timestamp || nowIso,
+        updatedAt: ts,
+        lastStatusAt: ts,
         driverStatus: driverStatus || existing.driverStatus || null,
       };
-
-      // Allow status webhook to set online/offline explicitly
-      if (inferredOnline !== null) {
-        rec.online = inferredOnline;
-      }
 
       onlineMap.set(key, rec);
       updates++;
@@ -416,5 +381,5 @@ process.on("SIGINT", () => {
 // --- Start
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
-  console.log(`PING timeout set to ${PING_TIMEOUT_MINUTES} minute(s).`);
+  console.log(`ONLINE timeout set to ${PING_TIMEOUT_MINUTES} minute(s).`);
 });
