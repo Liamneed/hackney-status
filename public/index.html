@@ -7,72 +7,29 @@
   <meta name="color-scheme" content="light dark" />
   <link rel="stylesheet" href="hackney.css" />
 
-  <!-- Extra styles just for the status pills -->
   <style>
-    .status-pill {
-      display:inline-block;
-      padding:4px 10px;
-      border-radius:999px;
-      font-size:0.78rem;
-      font-weight:600;
-      line-height:1;
-      white-space:nowrap;
-      text-align:center;
-      min-width:82px;
+    .status-text {
+      font-weight: 600;
+      font-size: 0.82rem;
+      white-space: nowrap;
     }
-    .status-pill--notworking {
-      background:#b91c1c;
-      color:#fff;
+    .status-text--notworking { color: #dc2626; }      /* red */
+    .status-text--clear      { color: #16a34a; }      /* green */
+    .status-text--dispatched { color: #ea580c; }      /* orange */
+    .status-text--dispatched-acc { color: #a855f7; }  /* purple */
+    .status-text--pickedup-cash { color: #f97316; }   /* orange (busy cash) */
+    .status-text--pickedup-acc  { color: #c4b5fd; }   /* lighter purple */
+    .status-text--rank      { color: #2563eb; }       /* blue */
+    .status-text--offering  {
+      color: #f9fafb;                                  /* white */
+      text-shadow: 0 0 3px rgba(0,0,0,0.9);           /* so it shows on light bg too */
     }
-    .status-pill--clear {
-      background:#16a34a;
-      color:#fff;
-    }
-    .status-pill--dispatched {
-      background:#ea580c;
-      color:#fff;
-    }
-    .status-pill--dispatched-acc {
-      background:#7c3aed;
-      color:#fff;
-    }
-    .status-pill--pickedup-cash {
-      background:#f97316;
-      color:#fff;
-    }
-    .status-pill--pickedup-acc {
-      background:#8b5cf6;
-      color:#fff;
-    }
-    .status-pill--street {
-      background:#2563eb;
-      color:#fff;
-    }
-    .status-pill--offering {
-      background:#f9fafb;
-      color:#111827;
-      border:1px solid #e5e7eb;
-    }
-    .status-pill--busy {
-      background:#f59e0b;
-      color:#111827;
-    }
-    .status-pill--unknown {
-      background:#6b7280;
-      color:#f9fafb;
-    }
+    .status-text--busy      { color: #fbbf24; }       /* generic busy */
+    .status-text--unknown   { color: #6b7280; }       /* grey */
 
-    /* Make the status column behave nicely on small screens */
-    .cell-status {
-      text-align:right;
-    }
+    .cell-status { text-align: right; }
     @media (max-width: 640px) {
-      .cell-status {
-        text-align:left;
-      }
-      .status-pill {
-        min-width:0;
-      }
+      .cell-status { text-align: left; }
     }
   </style>
 </head>
@@ -96,7 +53,6 @@
     <!-- Controls -->
     <div class="header-controls">
       <div class="controls-row">
-        <!-- Search -->
         <div class="search-box">
           <span class="search-icon">🔍</span>
           <input id="searchInput" type="search" inputmode="search"
@@ -104,21 +60,18 @@
                  class="search-input" />
         </div>
 
-        <!-- Filter by Status (working vs not working, using backend "online") -->
         <select id="statusFilter" class="control-select">
           <option value="all">Show: All</option>
           <option value="online">Working only</option>
           <option value="offline">Not working only</option>
         </select>
 
-        <!-- Sort -->
         <select id="sortSelect" class="control-select">
           <option value="callsign">Sort: Callsign</option>
           <option value="plateNumber">Sort: Plate</option>
           <option value="registration">Sort: Registration</option>
         </select>
 
-        <!-- Row highlight mode -->
         <label class="control-label">Row highlight</label>
         <select id="hlSelect" class="control-select">
           <option value="none">None</option>
@@ -127,10 +80,8 @@
         </select>
       </div>
 
-      <!-- Status counters -->
       <div id="statusCounts" class="status-counts"></div>
 
-      <!-- Column headers (4 columns: callsign / plate / reg / status pill) -->
       <div id="colHeader" class="table-header-wrap">
         <div class="table-row table-header">
           <div>Callsign</div>
@@ -155,7 +106,6 @@
   </main>
 
   <script>
-    // ===== Root font size (A− / A+) =====
     const MIN_PX = 15, MAX_PX = 20, ROOT_KEY = "root-font-px";
     const applyRootPx = (px) => document.documentElement.style.fontSize = px + "px";
     let rootPx = Math.min(MAX_PX, Math.max(MIN_PX, Number(localStorage.getItem(ROOT_KEY) || 16)));
@@ -173,7 +123,6 @@
       adjustStickyOffset();
     });
 
-    // ===== Dynamic sticky offset for column headers =====
     function adjustStickyOffset(){
       const h = document.getElementById("appHeader")?.offsetHeight || 60;
       const ch = document.getElementById("colHeader");
@@ -182,7 +131,6 @@
     window.addEventListener("resize", adjustStickyOffset);
     document.addEventListener("DOMContentLoaded", adjustStickyOffset);
 
-    // ===== CONFIG =====
     const API_VEHICLES = "/api/vehicles";
     const ONLINE_URL   = "/api/status";
     const SSE_URL      = "/api/status/stream";
@@ -190,14 +138,13 @@
     const STATUS_REFRESH_MS  = 5000;
     const SHOW_ALL = new URL(location.href).searchParams.get("all") === "1";
 
-    const STALE_MS = 12 * 60 * 60 * 1000; // 12 hours
+    const STALE_MS = 12 * 60 * 60 * 1000;
     function isStale(updatedAt){
       if (!updatedAt) return true;
       const t = new Date(updatedAt).getTime();
       return !Number.isFinite(t) || (Date.now() - t) > STALE_MS;
     }
 
-    // ===== HIGHLIGHT MODE =====
     const HL_KEY = "row-highlight-mode";
     const hlSelect = document.getElementById("hlSelect");
     let highlightMode = localStorage.getItem(HL_KEY) || "background";
@@ -208,7 +155,6 @@
       render();
     });
 
-    // ===== HELPERS =====
     const getList = (data) =>
       Array.isArray(data) ? data :
       (data?.items || data?.results || data?.vehicles || data?.data || []);
@@ -250,7 +196,6 @@
       return A.localeCompare(B, undefined, { numeric: true, sensitivity: "base" });
     };
 
-    // ===== ELEMENTS / STATE =====
     const rowsEl     = document.getElementById("rows");
     const skeletonEl = document.getElementById("skeleton");
     const refreshBtn = document.getElementById("refreshBtn");
@@ -261,11 +206,9 @@
 
     let baseMaster = [];
     let master = [];
-    // onlineMap: key -> { online, updatedAt, driverStatus }
     let onlineMap = new Map();
     let statusPollTimer = null;
 
-    // ===== STATUS helpers =====
     function inferOnline(obj) {
       if (typeof obj?.online === "boolean") return obj.online;
       const s = (obj?.status ?? obj?.shift ?? obj?.state ?? obj?.availability ?? "").toString().toLowerCase();
@@ -288,6 +231,7 @@
     function extractDriverStatus(obj) {
       const raw =
         obj?.driverStatus ??
+        obj?.driverStatusLabel ??
         obj?.statusText ??
         obj?.stateText ??
         obj?.driver_state ??
@@ -311,14 +255,16 @@
           online = inferOnline(item);
         }
 
-        const ds = extractDriverStatus(item);
+        const dsLabel = extractDriverStatus(item);
+        const dsCode  = item?.driverStatusCode || null;
 
-        // Default everyone to "not working" unless we have some signal
-        if (!online && !ds) {
+        // default to Not Working if we know nothing
+        if (!online && !dsLabel && !dsCode) {
           map.set(normKey(cs), {
             online: false,
             updatedAt: item?.updatedAt || null,
-            driverStatus: "Not Working",
+            driverStatusLabel: "Not Working",
+            driverStatusCode: "NotWorking",
           });
           continue;
         }
@@ -326,7 +272,8 @@
         map.set(normKey(cs), {
           online: online,
           updatedAt: item?.updatedAt || item?.timestamp || item?.time || item?.ModifiedDate || null,
-          driverStatus: ds || null,
+          driverStatusLabel: dsLabel || null,
+          driverStatusCode: dsCode || null,
         });
       }
       return map;
@@ -338,84 +285,75 @@
       return rec.online;
     };
     const updatedFor      = (cs) => onlineMap.get(normKey(cs))?.updatedAt || null;
-    const driverStatusFor = (cs) => onlineMap.get(normKey(cs))?.driverStatus || null;
+    const driverStatusLabelFor = (cs) => onlineMap.get(normKey(cs))?.driverStatusLabel || null;
+    const driverStatusCodeFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatusCode || null;
 
-    // ===== DRIVER STATUS → PILL MAPPING =====
-    function mapDriverStatus(raw) {
-      const value = (raw || "").toString().trim();
-      const lower = value.toLowerCase();
+    // Map code/label → coloured text
+    function mapDriverStatus(rawCode, rawLabel) {
+      const code = (rawCode || "").toString().trim();
+      const label = (rawLabel || "").toString().trim();
+      const lowerCode = code.toLowerCase();
+      const lowerLabel = label.toLowerCase();
 
-      // Default if nothing known
-      if (!value) {
-        return { type: "NotWorking", text: "Not Working", cls: "status-pill--notworking" };
+      // strong map by code first
+      if (code === "NotWorking") {
+        return { text: "Not Working", cls: "status-text--notworking" };
+      }
+      if (code === "Clear") {
+        return { text: "Clear", cls: "status-text--clear" };
+      }
+      if (code === "BusyMeterOff") {
+        return { text: "Dispatched", cls: "status-text--dispatched" };
+      }
+      if (code === "BusyMeterOffAccount") {
+        return { text: "Dispatched", cls: "status-text--dispatched-acc" };
+      }
+      if (code === "BusyMeterOnFromMeterOffCash") {
+        return { text: "Picked up", cls: "status-text--pickedup-cash" };
+      }
+      if (code === "BusyMeterOnFromMeterOffAccount") {
+        return { text: "Picked up", cls: "status-text--pickedup-acc" };
+      }
+      if (code === "BusyMeterOnFromClear") {
+        return { text: "Rank Job", cls: "status-text--rank" };
+      }
+      if (code === "JobOffered") {
+        return { text: "Offering Job", cls: "status-text--offering" };
       }
 
-      // Explicitly off shift / not working
-      if (
-        lower.includes("off shift") ||
-        lower.includes("off-duty") ||
-        lower.includes("off duty") ||
-        lower.includes("not working") ||
-        lower.includes("logged off") ||
-        lower.includes("signed off")
-      ) {
-        return { type: "NotWorking", text: "Not Working", cls: "status-pill--notworking" };
+      // no code – infer from label text (for ShiftChange etc.)
+      if (!code && !label) {
+        return { text: "Not Working", cls: "status-text--notworking" };
       }
 
-      // Clear
-      if (lower === "clear") {
-        return { type: "Clear", text: "Clear", cls: "status-pill--clear" };
+      if (!code) {
+        if (
+          lowerLabel.includes("off shift") ||
+          lowerLabel.includes("off duty") ||
+          lowerLabel.includes("logged off") ||
+          lowerLabel.includes("signed off") ||
+          lowerLabel.includes("not working")
+        ) {
+          return { text: "Not Working", cls: "status-text--notworking" };
+        }
+        if (lowerLabel === "clear") {
+          return { text: "Clear", cls: "status-text--clear" };
+        }
+        if (lowerLabel.startsWith("busy")) {
+          return { text: "Busy", cls: "status-text--busy" };
+        }
       }
 
-      // Job offered
-      if (lower.includes("joboffered") || lower.includes("offering job")) {
-        return { type: "JobOffered", text: "Offering Job", cls: "status-pill--offering" };
-      }
-
-      // Busy variants (from VehicleStatus or from labels like "Busy (Cash)")
-      if (lower.startsWith("busy")) {
-        const isCash    = lower.includes("cash");
-        const isAccount = lower.includes("account");
-
-        // If we ever get raw codes passed through directly:
-        if (value === "BusyMeterOff") {
-          return { type: "BusyMeterOff", text: "Dispatched", cls: "status-pill--dispatched" };
-        }
-        if (value === "BusyMeterOffAccount") {
-          return { type: "BusyMeterOffAccount", text: "Dispatched Acc", cls: "status-pill--dispatched-acc" };
-        }
-        if (value === "BusyMeterOnFromClear") {
-          return { type: "BusyMeterOnFromClear", text: "Street Booking", cls: "status-pill--street" };
-        }
-        if (value === "BusyMeterOnFromMeterOffCash") {
-          return { type: "BusyMeterOnFromMeterOffCash", text: "Picked up (Cash)", cls: "status-pill--pickedup-cash" };
-        }
-        if (value === "BusyMeterOnFromMeterOffAccount") {
-          return { type: "BusyMeterOnFromMeterOffAccount", text: "Picked up (Acc)", cls: "status-pill--pickedup-acc" };
-        }
-
-        // When we only see labels like "Busy (Cash)" / "Busy (Account)"
-        if (isCash) {
-          return { type: "BusyMeterOnFromMeterOffCash", text: "Picked up (Cash)", cls: "status-pill--pickedup-cash" };
-        }
-        if (isAccount) {
-          return { type: "BusyMeterOnFromMeterOffAccount", text: "Picked up (Acc)", cls: "status-pill--pickedup-acc" };
-        }
-
-        // Generic busy fallback
-        return { type: "Busy", text: "Busy", cls: "status-pill--busy" };
-      }
-
-      // Fallback unknown
-      return { type: "Unknown", text: value, cls: "status-pill--unknown" };
+      // fallback – show whatever we have
+      const text = label || code || "Unknown";
+      return { text, cls: "status-text--unknown" };
     }
 
-    function statusPill(rawStatus) {
-      const mapped = mapDriverStatus(rawStatus);
-      return `<span class="status-pill ${mapped.cls}">${mapped.text}</span>`;
+    function statusTextSpan(rawCode, rawLabel) {
+      const mapped = mapDriverStatus(rawCode, rawLabel);
+      return `<span class="status-text ${mapped.cls}">${mapped.text}</span>`;
     }
 
-    // ===== ROW chrome (still based on online boolean from backend) =====
     function rowChrome(on){
       if (highlightMode === "background") {
         if (on === true)  return "row row-bg-online";
@@ -430,17 +368,16 @@
       return "row";
     }
 
-    // ===== ROW =====
     function rowHTML(v, highlight=false) {
       const cs   = getCallsign(v) || "";
       const plat = getPlate(v)    || "—";
       const reg  = getReg(v)      || "—";
       const on   = onlineFor(cs);
       const ts   = updatedFor(cs);
-      const ds   = driverStatusFor(cs); // may be null/undefined
+      const code = driverStatusCodeFor(cs);
+      const label= driverStatusLabelFor(cs);
 
       const rowClass = rowChrome(on) + (highlight ? " row-flash" : "");
-
       const tooltip = ts ? ("Last update: " + new Date(ts).toLocaleString()) : "";
 
       return `
@@ -453,7 +390,7 @@
             <span class="pill-reg mono strong">${reg}</span>
           </div>
           <div class="cell cell-status">
-            ${statusPill(ds)}
+            ${statusTextSpan(code, label)}
           </div>
         </div>
       `;
@@ -474,7 +411,6 @@
       skeletonEl.classList.add("hidden");
     }
 
-    // ===== FILTER / SORT / SEARCH =====
     let searchTimer = null;
     function applyFiltersAndRender(changedKey=null){
       const q = searchEl.value.trim().toLowerCase();
@@ -529,7 +465,6 @@
     sortEl.addEventListener("change", () => applyFiltersAndRender());
     statusFilterEl.addEventListener("change", () => applyFiltersAndRender());
 
-    // ===== DATA LOADERS =====
     async function fetchVehicles() {
       try {
         skeletonEl.classList.remove("hidden");
@@ -580,7 +515,6 @@
       }
     }
 
-    // ===== LIVE UPDATES (SSE + fallback) =====
     function wireSSE() {
       if (!("EventSource" in window)) return false;
       try {
@@ -600,7 +534,8 @@
               m.set(key, {
                 online: !!item.online,
                 updatedAt: item.updatedAt || null,
-                driverStatus: item.driverStatus || null,
+                driverStatusLabel: item.driverStatus || null,
+                driverStatusCode: item.driverStatusCode || null,
               });
             }
             onlineMap = m;
@@ -614,11 +549,13 @@
             if (!p?.callsign) return;
             const key = normKey(p.callsign);
             const prev = onlineMap.get(key)?.online;
-            const prevStatus = onlineMap.get(key)?.driverStatus || null;
+            const prevLabel = onlineMap.get(key)?.driverStatusLabel || null;
+            const prevCode  = onlineMap.get(key)?.driverStatusCode || null;
             onlineMap.set(key, {
               online: (typeof p.online === "boolean" ? p.online : prev),
               updatedAt: p.updatedAt || null,
-              driverStatus: p.driverStatus ?? prevStatus,
+              driverStatusLabel: p.driverStatus ?? prevLabel,
+              driverStatusCode: p.driverStatusCode ?? prevCode,
             });
             applyFiltersAndRender(prev !== p.online ? key : null);
           } catch {}
@@ -635,7 +572,6 @@
       statusPollTimer = setInterval(fetchOnline, STATUS_REFRESH_MS);
     }
 
-    // ===== INIT =====
     setInterval(fetchVehicles, VEHICLE_REFRESH_MS);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchOnline(); });
 
