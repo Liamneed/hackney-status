@@ -19,9 +19,8 @@ const AUTOCAB_KEY    = process.env.AUTOCAB_KEY || "";
 const WEBHOOK_TOKEN  = process.env.WEBHOOK_TOKEN || "";
 const STATUS_FILE    = process.env.STATUS_FILE || "./status.json";
 
-// minutes before a vehicle is considered offline if no activity
-// (default 15 mins now, env can override)
-const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 15);
+// minutes before a vehicle is considered offline if no ping
+const PING_TIMEOUT_MINUTES = Number(process.env.PING_TIMEOUT_MINUTES || 10);
 const OFFLINE_TIMEOUT_MS   = PING_TIMEOUT_MINUTES * 60 * 1000;
 
 // --- Middleware
@@ -31,16 +30,14 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * Store:
- *  callsign -> {
- *    updatedAt: ISO string,      // last updated (any source)
- *    lastPingAt: ISO string,     // last HackneyLocation ping
- *    lastStatusAt: ISO string,   // last Status webhook hit
- *    driverStatus: string | null // clear / busy / etc.
- *  }
+ * Store per callsign:
+ *   {
+ *     lastPingAt: ISO string,     // last ping (Status or HackneyLocation)
+ *     updatedAt: ISO string,      // last update time
+ *     driverStatus: string | null // Busy / Clear / etc
+ *   }
  *
- * NOTE: we deliberately DO NOT persist any "online" boolean.
- * Online/offline is always derived from timestamps.
+ * Online is ALWAYS derived from lastPingAt + timeout.
  */
 let onlineMap = new Map();
 
@@ -75,20 +72,16 @@ loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
-// --- Helpers for webhook payloads
-function coercePayloadToArray(body) {
-  let b = body;
-  if (typeof b === "string") {
-    try { b = JSON.parse(b); } catch { /* ignore */ }
-  }
-  if (Array.isArray(b)) return b;
-  if (Array.isArray(b?.data)) return b.data;
-  if (Array.isArray(b?.payload)) return b.payload;
-  if (b == null || b === "") return [];
-  return [b];
+// Helpers
+function computeOnline(rec) {
+  if (!rec || !rec.lastPingAt) return false;
+  const t = new Date(rec.lastPingAt).getTime();
+  if (!Number.isFinite(t)) return false;
+  const age = Date.now() - t;
+  return age <= OFFLINE_TIMEOUT_MS;
 }
 
-function extractCallsign(obj) {
+function extractCallsignGeneric(obj) {
   const direct =
     obj?.callsign ??
     obj?.callSign ??
@@ -111,61 +104,22 @@ function extractCallsign(obj) {
   );
 }
 
-// friendly text for driver status column
-function extractDriverStatus(obj) {
-  const candidates = [
-    obj?.driverStatus,
-    obj?.DriverStatus,
-    obj?.driverStatusName,
-    obj?.DriverStatusName,
-    obj?.statusText,
-    obj?.StatusText,
-    obj?.stateText,
-    obj?.StateText,
-    obj?.driver_state,
-    obj?.DriverState,
-    obj?.currentStatus,
-    obj?.CurrentStatus,
-    obj?.activity,
-    obj?.Activity,
-    obj?.status,
-    obj?.Status,
-    obj?.availability,
-    obj?.Availability,
-  ];
+function normaliseVehicleStatus(vehicleStatus) {
+  if (!vehicleStatus) return "";
+  const s = String(vehicleStatus).trim();
+  const lower = s.toLowerCase();
 
-  for (const val of candidates) {
-    if (val !== undefined && val !== null) {
-      const s = String(val).trim();
-      if (s) return s;
-    }
-  }
+  if (lower.startsWith("busy")) return "Busy";
+  if (lower.includes("clear") || lower.includes("free")) return "Clear";
 
-  return "";
-}
-
-/**
- * Effective online:
- *  ONLINE  if last activity (ping or status) < timeout
- *  OFFLINE otherwise
- */
-function computeEffectiveOnline(rec) {
-  if (!rec) return null;
-
-  const iso = rec.lastPingAt || rec.lastStatusAt || rec.updatedAt;
-  if (!iso) return null;
-
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return null;
-
-  const age = Date.now() - t;
-  return age <= OFFLINE_TIMEOUT_MS;
+  // Fallback: show raw string
+  return s;
 }
 
 // --- Static files
 app.use(express.static(path.join(__dirname, "public")));
 
-// --- SSE support
+// --- SSE
 let sseClients = new Set();
 
 app.get("/api/status/stream", (req, res) => {
@@ -176,7 +130,7 @@ app.get("/api/status/stream", (req, res) => {
 
   const snapshot = Array.from(onlineMap.entries()).map(([k, v]) => ({
     callsign: k,
-    online: computeEffectiveOnline(v),
+    online: computeOnline(v),
     updatedAt: v.updatedAt || null,
     driverStatus: v.driverStatus || null,
   }));
@@ -197,16 +151,20 @@ setInterval(() => {
   }
 }, HEARTBEAT_MS);
 
-function sseBroadcast(event, payload) {
-  const msg = `event: ${event}\ndata:${JSON.stringify(payload)}\n\n`;
+function sseBroadcastUpdate(callsign, rec) {
+  const payload = {
+    callsign,
+    online: computeOnline(rec),
+    updatedAt: rec.updatedAt || null,
+    driverStatus: rec.driverStatus || null,
+  };
+  const msg = `event: status\ndata:${JSON.stringify(payload)}\n\n`;
   for (const res of sseClients) {
-    try {
-      res.write(msg);
-    } catch {/* ignore */}
+    try { res.write(msg); } catch {/* ignore */}
   }
 }
 
-// --- Webhook: Location pings (GPS / keep-alive)
+// --- Webhook: HackneyLocation (simple ping, no status)
 app.post("/webhook/HackneyLocation", (req, res) => {
   try {
     if (WEBHOOK_TOKEN) {
@@ -216,39 +174,41 @@ app.post("/webhook/HackneyLocation", (req, res) => {
       }
     }
 
-    const items = coercePayloadToArray(req.body);
+    const body = req.body;
+    const items = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.data)
+        ? body.data
+        : [body];
+
     let updates = 0;
     const nowIso = new Date().toISOString();
 
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
 
-      const cs = extractCallsign(item);
+      const cs = extractCallsignGeneric(item);
       if (!cs) continue;
-
       const key = normKey(cs);
-      const existing = onlineMap.get(key) || {};
 
+      const ts = item?.Timestamp || item?.timestamp || item?.time || nowIso;
+
+      const existing = onlineMap.get(key) || {};
       const rec = {
         ...existing,
-        lastPingAt: item?.timestamp || item?.time || nowIso,
-        updatedAt: nowIso,
+        lastPingAt: ts,
+        updatedAt: ts,
+        // driverStatus unchanged here – this is just a ping
       };
 
       onlineMap.set(key, rec);
       updates++;
-
-      sseBroadcast("status", {
-        callsign: key,
-        online: computeEffectiveOnline(rec),
-        updatedAt: rec.updatedAt,
-        driverStatus: rec.driverStatus || null,
-      });
+      sseBroadcastUpdate(key, rec);
     }
 
     if (updates > 0) {
       saveStatusToDisk();
-      console.log(`HackneyLocation: updated ${updates} records`);
+      console.log(`HackneyLocation webhook: updated ${updates} vehicles`);
     }
 
     res.json({ ok: true, updates });
@@ -258,7 +218,7 @@ app.post("/webhook/HackneyLocation", (req, res) => {
   }
 });
 
-// --- Webhook: Driver status (clear / busy / etc.)
+// --- Webhook: Status — VehicleTracksChanged (BUSY / CLEAR + ping)
 app.post("/webhook/Status", (req, res) => {
   try {
     if (WEBHOOK_TOKEN) {
@@ -268,47 +228,39 @@ app.post("/webhook/Status", (req, res) => {
       }
     }
 
-    const items = coercePayloadToArray(req.body);
+    const body = req.body || {};
+    const tracks = Array.isArray(body.VehicleTracks) ? body.VehicleTracks : [];
+
     let updates = 0;
-    const nowIso = new Date().toISOString();
 
-    for (const item of items) {
-      if (!item || typeof item !== "object") continue;
+    for (const track of tracks) {
+      if (!track || typeof track !== "object") continue;
 
-      const cs = extractCallsign(item);
+      const vehicle = track.Vehicle || {};
+      const driver  = track.Driver  || {};
+      const cs = vehicle.Callsign || driver.Callsign || null;
       if (!cs) continue;
+
       const key = normKey(cs);
+      const ts  = track.Timestamp || new Date().toISOString();
+      const vs  = normaliseVehicleStatus(track.VehicleStatus);
 
       const existing = onlineMap.get(key) || {};
-      const driverStatus = extractDriverStatus(item);
-
-      const ts =
-        item?.ModifiedDate ||
-        item?.updatedAt ||
-        item?.timestamp ||
-        nowIso;
-
       const rec = {
         ...existing,
+        lastPingAt: ts,        // treat this as a ping
         updatedAt: ts,
-        lastStatusAt: ts,
-        driverStatus: driverStatus || existing.driverStatus || null,
+        driverStatus: vs || existing.driverStatus || null,
       };
 
       onlineMap.set(key, rec);
       updates++;
-
-      sseBroadcast("status", {
-        callsign: key,
-        online: computeEffectiveOnline(rec),
-        updatedAt: rec.updatedAt,
-        driverStatus: rec.driverStatus || null,
-      });
+      sseBroadcastUpdate(key, rec);
     }
 
     if (updates > 0) {
       saveStatusToDisk();
-      console.log(`Status webhook: updated ${updates} records`);
+      console.log(`Status webhook (VehicleTracksChanged): updated ${updates} vehicles`);
     }
 
     res.json({ ok: true, updates });
@@ -318,12 +270,12 @@ app.post("/webhook/Status", (req, res) => {
   }
 });
 
-// --- Read endpoints used by the frontend
+// --- API used by frontend
 app.get("/api/status", (_req, res) => {
   try {
     const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
       callsign: k,
-      online: computeEffectiveOnline(v),
+      online: computeOnline(v),
       updatedAt: v.updatedAt || null,
       driverStatus: v.driverStatus || null,
     }));
