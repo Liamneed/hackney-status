@@ -287,7 +287,7 @@
 
       // Exact code mappings
       if (code === "NotWorking") {
-        return { text: "NOT WORKING", cls: "status-text--notworking" };
+        return { text: "OFFLINE", cls: "status-text--notworking" };
       }
       if (code === "Clear") {
         return { text: "CLEAR", cls: "status-text--clear" };
@@ -325,7 +325,7 @@
           lowerLabel.includes("signed off") ||
           lowerLabel.includes("not working")
         ) {
-          return { text: "NOT WORKING", cls: "status-text--notworking" };
+          return { text: "OFFLINE", cls: "status-text--notworking" };
         }
         if (lowerLabel === "clear") {
           return { text: "CLEAR", cls: "status-text--clear" };
@@ -348,7 +348,7 @@
       }
 
       if (!code && !label) {
-        return { text: "NOT WORKING", cls: "status-text--notworking" };
+        return { text: "OFFLINE", cls: "status-text--notworking" };
       }
 
       // Last resort: show whatever label we get, uppercased, as "unknown" styling
