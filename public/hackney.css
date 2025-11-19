@@ -80,6 +80,14 @@ body {
   text-overflow: ellipsis;
 }
 
+.header-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: #9ca3af;
+  max-width: 32rem;
+}
+
 .font-buttons {
   display: flex;
   align-items: center;
@@ -172,8 +180,51 @@ body {
 /* Status counts */
 .status-counts {
   margin-top: 0.25rem;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   color: #9ca3af;
+}
+
+/* Status legend */
+.status-legend {
+  margin-top: 0.2rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7rem;
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legend-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #020617;
+}
+
+.legend-swatch--clear {
+  background: #16a34a;
+}
+
+.legend-swatch--dispatched {
+  background: #e28d00;
+}
+
+.legend-swatch--pickedup {
+  background: #ff1493;
+}
+
+.legend-swatch--rank {
+  background: #009dd2;
+}
+
+.legend-swatch--notworking {
+  background: #dc2626;
 }
 
 /* Table header */
@@ -296,12 +347,25 @@ body {
   color: #e5e7eb;
 }
 
-/* Status dot */
+/* Status panel */
 .cell-status {
   display: flex;
+  flex-direction: column;
   justify-content: flex-end;
+  align-items: flex-end;
+  gap: 0.1rem;
 }
 
+.status-main {
+  line-height: 1.2;
+}
+
+.status-updated {
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+/* Status dot (kept in case you want it later) */
 .dot {
   width: 0.55rem;
   height: 0.55rem;
@@ -355,12 +419,25 @@ body {
 /* ===== Mobile tweaks ===== */
 @media (max-width: 640px) {
   .header-inner {
-    padding: 0.45rem 0.55rem;
+    padding: 0.5rem 0.55rem;
     gap: 0.4rem;
+    align-items: flex-start;
   }
 
   .header-controls {
     padding: 0 0.55rem 0.45rem;
+  }
+
+  .header-title {
+    font-size: 0.96rem;
+  }
+
+  .header-subtitle {
+    font-size: 0.8rem;
+  }
+
+  .font-buttons {
+    margin-left: auto;
   }
 
   .main {
@@ -372,7 +449,7 @@ body {
   }
 
   .control-select {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     padding: 0.25rem 0.45rem;
   }
 
@@ -382,35 +459,48 @@ body {
   }
 
   .search-input {
+    font-size: 0.82rem;
+  }
+
+  .status-counts {
     font-size: 0.8rem;
+  }
+
+  .status-legend {
+    font-size: 0.76rem;
+    gap: 0.25rem 0.55rem;
   }
 
   .table-row,
   .row {
-    grid-template-columns: 64px minmax(90px, 1.2fr) minmax(90px, 1fr) minmax(80px, 1fr) 40px;
+    grid-template-columns: 70px minmax(110px, 1.3fr) minmax(100px, 1.1fr) minmax(110px, 1.2fr) 0;
     column-gap: 0.35rem;
   }
 
   .row {
-    padding: 0.35rem 0.55rem;
+    padding: 0.4rem 0.55rem;
   }
 
   .cell {
-    font-size: 0.78rem;
+    font-size: 0.82rem;
   }
 
   .pill-muted,
   .pill-reg {
-    font-size: 0.75rem;
-    padding: 0.05rem 0.32rem;
+    font-size: 0.78rem;
+    padding: 0.06rem 0.32rem;
   }
 
   .driver-status-text {
-    font-size: 0.7rem;
+    font-size: 0.72rem;
   }
 
-  .dot {
-    width: 0.5rem;
-    height: 0.5rem;
+  .cell-status {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .status-updated {
+    font-size: 0.72rem;
   }
 }
