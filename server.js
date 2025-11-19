@@ -92,6 +92,17 @@ loadStatusFromDisk();
 
 const normKey = (s) => String(s || "").trim().toUpperCase();
 
+// Helper: is incoming timestamp newer than existing?
+function isNewerTimestamp(incomingIso, existingIso) {
+  if (!incomingIso) return false;
+  const inMs = Date.parse(incomingIso);
+  if (!Number.isFinite(inMs)) return false;
+  if (!existingIso) return true;
+  const exMs = Date.parse(existingIso);
+  if (!Number.isFinite(exMs)) return true;
+  return inMs >= exMs;
+}
+
 // ---------- ONLINE LOGIC ----------
 //
 // Rules:
@@ -122,7 +133,7 @@ function computeOnline(rec) {
     return false;
   }
 
-  // must have an explicit "online" flag from Status / ShiftChange
+  // must have an explicit "online" flag from Status / ShiftChange / HackneyLocation
   if (rec.explicitOnline !== true) return false;
 
   // Optional timeout for stale pings
@@ -172,7 +183,7 @@ function coercePayloadToArray(body) {
   return [b];
 }
 
-// VehicleStatus → friendly label
+// VehicleStatus → friendly label (backend only; frontend now does its own shortening)
 function vehicleStatusLabel(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
@@ -361,6 +372,11 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 
       const existing = onlineMap.get(key) || {};
 
+      // 🔑 Only update if this ping is newer than what we already have
+      if (!isNewerTimestamp(ts, existing.updatedAt || existing.lastPingAt || null)) {
+        continue;
+      }
+
       // NEW LOGIC:
       // - If we already know they are explicitly OFF (false), keep them off.
       // - Otherwise (undefined/null/true), treat a location ping as "working / online".
@@ -418,15 +434,25 @@ app.post("/webhook/Status", (req, res) => {
       if (!cs) continue;
 
       const key = normKey(cs);
-      const ts  = track.Timestamp || track.timestamp || new Date().toISOString();
+      const ts  =
+        track.Timestamp ||
+        track.timestamp ||
+        track.time ||
+        new Date().toISOString();
 
       const rawCode = track.VehicleStatus || track.vehicleStatus || null;
       const label   = vehicleStatusLabel(rawCode);
 
       const existing = onlineMap.get(key) || {};
+
+      // 🔑 Only update if this status is newer than what we already have
+      if (!isNewerTimestamp(ts, existing.updatedAt || null)) {
+        continue;
+      }
+
       const rec = {
         ...existing,
-        lastPingAt: ts,
+        lastPingAt: existing.lastPingAt || ts, // keep old ping if newer comes from location
         updatedAt: ts,
         driverStatusCode: rawCode || existing.driverStatusCode || null,
         driverStatusLabel: label ?? existing.driverStatusLabel ?? rawCode ?? null,
@@ -520,6 +546,12 @@ app.post("/webhook/ShiftChange", (req, res) => {
       }
 
       const existing = onlineMap.get(key) || {};
+
+      // 🔑 Only update if this shift change is newer than what we already have
+      if (!isNewerTimestamp(ts, existing.updatedAt || null)) {
+        continue;
+      }
+
       let rec = {
         ...existing,
         updatedAt: ts,
