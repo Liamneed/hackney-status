@@ -279,38 +279,44 @@
     const driverStatusLabelFor = (cs) => onlineMap.get(normKey(cs))?.driverStatusLabel || null;
     const driverStatusCodeFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatusCode || null;
 
+    // 👇 UPDATED: shorter, more descriptive status labels
     function mapDriverStatus(rawCode, rawLabel) {
       const code = (rawCode || "").toString().trim();
       const label = (rawLabel || "").toString().trim();
-      const lowerCode = code.toLowerCase();
       const lowerLabel = label.toLowerCase();
 
+      // Exact code mappings
       if (code === "NotWorking") {
-        return { text: "Not Working — Off shift", cls: "status-text--notworking" };
+        return { text: "NOT WORKING", cls: "status-text--notworking" };
       }
       if (code === "Clear") {
-        return { text: "Clear — Waiting for a job", cls: "status-text--clear" };
+        return { text: "CLEAR", cls: "status-text--clear" };
       }
       if (code === "BusyMeterOff") {
-        return { text: "Dispatched — Heading to pick up", cls: "status-text--dispatched" };
+        // Dispatched (meter off, likely cash)
+        return { text: "DISPATCH", cls: "status-text--dispatched" };
       }
       if (code === "BusyMeterOffAccount") {
-        return { text: "Dispatched — Heading to account job", cls: "status-text--dispatched-acc" };
+        // Dispatched to account job
+        return { text: "DISPATCH ACC", cls: "status-text--dispatched-acc" };
       }
       if (code === "BusyMeterOnFromMeterOffCash") {
-        return { text: "Picked up — Cash job in progress", cls: "status-text--pickedup-cash" };
+        // Passenger on board, cash job
+        return { text: "BUSY CASH", cls: "status-text--pickedup-cash" };
       }
       if (code === "BusyMeterOnFromMeterOffAccount") {
-        return { text: "Picked up — Account job in progress", cls: "status-text--pickedup-acc" };
+        // Passenger on board, account job
+        return { text: "BUSY ACC", cls: "status-text--pickedup-acc" };
       }
       if (code === "BusyMeterOnFromClear") {
-        return { text: "Rank Job — On hire from rank", cls: "status-text--rank" };
+        // Street / rank booking
+        return { text: "RANK", cls: "status-text--rank" };
       }
       if (code === "JobOffered") {
-        return { text: "Offering Job — Awaiting driver response", cls: "status-text--offering" };
+        return { text: "OFFER", cls: "status-text--offering" };
       }
 
-      // infer from label (for cases where only text is sent)
+      // Fallbacks when only label comes through
       if (!code) {
         if (
           lowerLabel.includes("off shift") ||
@@ -319,24 +325,34 @@
           lowerLabel.includes("signed off") ||
           lowerLabel.includes("not working")
         ) {
-          return { text: "Not Working — Off shift", cls: "status-text--notworking" };
+          return { text: "NOT WORKING", cls: "status-text--notworking" };
         }
         if (lowerLabel === "clear") {
-          return { text: "Clear — Waiting for a job", cls: "status-text--clear" };
+          return { text: "CLEAR", cls: "status-text--clear" };
         }
         if (lowerLabel.includes("offer")) {
-          return { text: "Offering Job — Awaiting driver response", cls: "status-text--offering" };
+          return { text: "OFFER", cls: "status-text--offering" };
+        }
+        if (lowerLabel.includes("account") && lowerLabel.includes("busy")) {
+          return { text: "BUSY ACC", cls: "status-text--busy" };
+        }
+        if (lowerLabel.includes("cash") && lowerLabel.includes("busy")) {
+          return { text: "BUSY CASH", cls: "status-text--busy" };
         }
         if (lowerLabel.startsWith("busy")) {
-          return { text: "Busy — On a job", cls: "status-text--busy" };
+          return { text: "BUSY", cls: "status-text--busy" };
+        }
+        if (lowerLabel.includes("street") || lowerLabel.includes("rank")) {
+          return { text: "RANK", cls: "status-text--rank" };
         }
       }
 
       if (!code && !label) {
-        return { text: "Not Working — Off shift", cls: "status-text--notworking" };
+        return { text: "NOT WORKING", cls: "status-text--notworking" };
       }
 
-      const text = label || code || "Status updating…";
+      // Last resort: show whatever label we get, uppercased, as "unknown" styling
+      const text = (label || code).toString().toUpperCase();
       return { text, cls: "status-text--unknown" };
     }
 
