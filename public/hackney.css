@@ -257,11 +257,15 @@ body {
   overflow: hidden;
 }
 
-/* Shared grid columns: 5 columns */
+/* Shared grid columns: 4 columns (Callsign | Status | Reg | Taxi Plate) */
 .table-row,
 .row {
   display: grid;
-  grid-template-columns: 90px minmax(150px, 1.4fr) minmax(120px, 1.1fr) minmax(120px, 1.2fr) 60px;
+  grid-template-columns:
+    80px                     /* Callsign */
+    minmax(150px, 1.7fr)     /* Status */
+    minmax(120px, 1.2fr)     /* Reg Plate */
+    minmax(120px, 1.1fr);    /* Taxi Plate */
   column-gap: 0.5rem;
   align-items: center;
 }
@@ -473,7 +477,11 @@ body {
 
   .table-row,
   .row {
-    grid-template-columns: 70px minmax(110px, 1.3fr) minmax(100px, 1.1fr) minmax(110px, 1.2fr) 0;
+    grid-template-columns:
+      70px                     /* Callsign */
+      minmax(130px, 1.6fr)     /* Status */
+      minmax(90px, 1.1fr)      /* Reg */
+      minmax(90px, 1fr);       /* Taxi plate */
     column-gap: 0.35rem;
   }
 
