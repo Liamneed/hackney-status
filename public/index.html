@@ -31,12 +31,36 @@
     @media (max-width: 640px) {
       .cell-status { text-align: left; }
     }
+
+    /* New: title block for Station Rank */
+    .header-title-block {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+    .app-title {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
   <header id="appHeader" class="header">
     <div class="header-inner">
       <div class="brand-box">N</div>
+
+      <!-- New title block -->
+      <div class="header-title-block">
+        <h1 class="app-title">Station Rank</h1>
+      </div>
+
       <div class="header-actions">
         <div class="font-buttons">
           <button id="fontSm" class="btn-ghost" title="Smaller text">A−</button>
@@ -86,9 +110,9 @@
       <div id="colHeader" class="table-header-wrap">
         <div class="table-row table-header">
           <div>Callsign</div>
-          <div>Status</div>
-          <div>Reg Plate</div>
-          <div>Taxi Plate</div>
+          <div>Status (OFFER / BUSY / CLEAR)</div>
+          <div>Reg (VRM)</div>
+          <div>Taxi Plate No.</div>
         </div>
       </div>
     </div>
