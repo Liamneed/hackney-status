@@ -62,7 +62,7 @@
         <select id="statusFilter" class="control-select">
           <option value="all">Show: All drivers</option>
           <option value="online">Working only</option>
-          <option value="offline">Not working only</option>
+          <option value="offline">Offline only</option>
         </select>
 
         <select id="sortSelect" class="control-select">
@@ -95,16 +95,16 @@
           <span class="legend-swatch legend-swatch--rank"></span>Rank job in progress
         </span>
         <span class="legend-item">
-          <span class="legend-swatch legend-swatch--notworking"></span>Not working / off shift
+          <span class="legend-swatch legend-swatch--notworking"></span>Offline / off shift
         </span>
       </div>
 
       <div id="colHeader" class="table-header-wrap">
         <div class="table-row table-header">
           <div>Callsign</div>
-          <div>Taxi Plate</div>
+          <div>Status</div>
           <div>Reg Plate</div>
-          <div class="text-right">Driver Status</div>
+          <div>Taxi Plate</div>
         </div>
       </div>
     </div>
@@ -256,7 +256,7 @@
         let code  = dsCode;
 
         if (!online && !label && !code) {
-          label = "Not Working";
+          label = "OFFLINE";
           code  = "NotWorking";
         }
 
@@ -279,13 +279,12 @@
     const driverStatusLabelFor = (cs) => onlineMap.get(normKey(cs))?.driverStatusLabel || null;
     const driverStatusCodeFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatusCode || null;
 
-    // 👇 UPDATED: shorter, more descriptive status labels
+    // Short, descriptive status labels
     function mapDriverStatus(rawCode, rawLabel) {
       const code = (rawCode || "").toString().trim();
       const label = (rawLabel || "").toString().trim();
       const lowerLabel = label.toLowerCase();
 
-      // Exact code mappings
       if (code === "NotWorking") {
         return { text: "OFFLINE", cls: "status-text--notworking" };
       }
@@ -293,37 +292,32 @@
         return { text: "CLEAR", cls: "status-text--clear" };
       }
       if (code === "BusyMeterOff") {
-        // Dispatched (meter off, likely cash)
         return { text: "DISPATCH", cls: "status-text--dispatched" };
       }
       if (code === "BusyMeterOffAccount") {
-        // Dispatched to account job
         return { text: "DISPATCH ACC", cls: "status-text--dispatched-acc" };
       }
       if (code === "BusyMeterOnFromMeterOffCash") {
-        // Passenger on board, cash job
         return { text: "BUSY CASH", cls: "status-text--pickedup-cash" };
       }
       if (code === "BusyMeterOnFromMeterOffAccount") {
-        // Passenger on board, account job
         return { text: "BUSY ACC", cls: "status-text--pickedup-acc" };
       }
       if (code === "BusyMeterOnFromClear") {
-        // Street / rank booking
         return { text: "RANK", cls: "status-text--rank" };
       }
       if (code === "JobOffered") {
         return { text: "OFFER", cls: "status-text--offering" };
       }
 
-      // Fallbacks when only label comes through
       if (!code) {
         if (
           lowerLabel.includes("off shift") ||
           lowerLabel.includes("off duty") ||
           lowerLabel.includes("logged off") ||
           lowerLabel.includes("signed off") ||
-          lowerLabel.includes("not working")
+          lowerLabel.includes("not working") ||
+          lowerLabel === "offline"
         ) {
           return { text: "OFFLINE", cls: "status-text--notworking" };
         }
@@ -351,7 +345,6 @@
         return { text: "OFFLINE", cls: "status-text--notworking" };
       }
 
-      // Last resort: show whatever label we get, uppercased, as "unknown" styling
       const text = (label || code).toString().toUpperCase();
       return { text, cls: "status-text--unknown" };
     }
@@ -382,6 +375,7 @@
       return "row";
     }
 
+    // 🔁 NEW ORDER: Callsign → Status → Reg → Taxi Plate
     function rowHTML(v, highlight=false) {
       const cs   = getCallsign(v) || "";
       const plat = getPlate(v)    || "—";
@@ -397,18 +391,25 @@
 
       return `
         <div id="row-${normKey(cs)}" class="${rowClass}" title="${tooltip}">
+          <!-- Callsign -->
           <div class="cell mono strong">${cs || "(no)"}</div>
-          <div class="cell">
-            <span class="pill-muted mono">${plat}</span>
-          </div>
-          <div class="cell">
-            <span class="pill-reg mono strong">${reg}</span>
-          </div>
+
+          <!-- Status (moved left) -->
           <div class="cell cell-status">
             <div class="status-main">
               ${statusTextSpan(code, label)}
             </div>
             ${updatedLabel ? `<div class="status-updated">Updated ${updatedLabel}</div>` : ""}
+          </div>
+
+          <!-- Reg Plate -->
+          <div class="cell">
+            <span class="pill-reg mono strong">${reg}</span>
+          </div>
+
+          <!-- Taxi Plate -->
+          <div class="cell">
+            <span class="pill-muted mono">${plat}</span>
           </div>
         </div>
       `;
@@ -466,7 +467,7 @@
 
       statusCountsEl.innerHTML =
         '🟢 Working: <b>' + onlineCount + '</b>&nbsp;&nbsp;' +
-        '🔴 Not working: <b>' + offlineCount + '</b>&nbsp;&nbsp;' +
+        '🔴 Offline: <b>' + offlineCount + '</b>&nbsp;&nbsp;' +
         '⚪ Total: <b>' + total + '</b>';
 
       render(changedKey);
