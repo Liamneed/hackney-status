@@ -50,8 +50,9 @@ body {
   margin: 0 auto;
   padding: 0.5rem 0.7rem;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+  flex-wrap: wrap; /* allow wrapping when font size increases */
 }
 
 .brand-box {
@@ -67,7 +68,7 @@ body {
 }
 
 .header-title-wrap {
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -85,7 +86,15 @@ body {
   font-size: 0.78rem;
   line-height: 1.4;
   color: #9ca3af;
-  max-width: 32rem;
+  max-width: 34rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .font-buttons {
@@ -257,7 +266,7 @@ body {
   overflow: hidden;
 }
 
-/* Shared grid columns: 4 columns (Callsign | Status | Reg | Taxi Plate) */
+/* Shared grid columns: Callsign | Status | Reg | Taxi Plate */
 .table-row,
 .row {
   display: grid;
@@ -425,11 +434,6 @@ body {
   .header-inner {
     padding: 0.5rem 0.55rem;
     gap: 0.4rem;
-    align-items: flex-start;
-  }
-
-  .header-controls {
-    padding: 0 0.55rem 0.45rem;
   }
 
   .header-title {
@@ -438,10 +442,16 @@ body {
 
   .header-subtitle {
     font-size: 0.8rem;
+    max-width: 100%;
   }
 
-  .font-buttons {
-    margin-left: auto;
+  .header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .header-controls {
+    padding: 0 0.55rem 0.45rem;
   }
 
   .main {
