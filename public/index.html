@@ -37,12 +37,6 @@
   <header id="appHeader" class="header">
     <div class="header-inner">
       <div class="brand-box">N</div>
-      <div class="header-title-wrap">
-        <h1 class="header-title">Active Hackney Drivers</h1>
-        <p class="header-subtitle">
-          Live view of licensed Hackney carriages. Search by callsign, taxi plate or reg and use A+/A− to adjust text size on smaller screens.
-        </p>
-      </div>
       <div class="header-actions">
         <div class="font-buttons">
           <button id="fontSm" class="btn-ghost" title="Smaller text">A−</button>
@@ -84,18 +78,6 @@
       <div id="statusCounts" class="status-counts"></div>
 
       <div class="status-legend">
-        <span class="legend-item">
-          <span class="legend-swatch legend-swatch--clear"></span>Clear / available
-        </span>
-        <span class="legend-item">
-          <span class="legend-swatch legend-swatch--dispatched"></span>Dispatched to pick up
-        </span>
-        <span class="legend-item">
-          <span class="legend-swatch legend-swatch--pickedup"></span>Passenger on board
-        </span>
-        <span class="legend-item">
-          <span class="legend-swatch legend-swatch--rank"></span>Rank job in progress
-        </span>
         <span class="legend-item">
           <span class="legend-swatch legend-swatch--notworking"></span>Offline / off shift
         </span>
@@ -272,7 +254,7 @@
       return map;
     }
 
-    // 🔍 Online detection: trust status code/label first, then .online flag
+    // Online detection: trust status code/label first, then .online flag
     const onlineFor = (cs) => {
       const rec = onlineMap.get(normKey(cs));
       if (!rec) return false;
@@ -280,10 +262,8 @@
       const code = (rec.driverStatusCode || "").toString().trim();
       const label = (rec.driverStatusLabel || "").toString().trim().toUpperCase();
 
-      // Definitely offline
       if (code === "NotWorking" || label === "OFFLINE") return false;
 
-      // These codes/labels mean "working"
       const workingCodes = [
         "Clear",
         "BusyMeterOff",
@@ -307,7 +287,6 @@
       if (workingCodes.includes(code)) return true;
       if (workingLabels.includes(label)) return true;
 
-      // Fallback to backend .online flag
       return !!rec.online;
     };
 
@@ -430,7 +409,7 @@
           <!-- Callsign -->
           <div class="cell mono strong">${cs || "(no)"}</div>
 
-          <!-- Status (second column) -->
+          <!-- Status -->
           <div class="cell cell-status">
             <div class="status-main">
               ${statusTextSpan(code, label)}
