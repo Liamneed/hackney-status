@@ -10,22 +10,23 @@
   <style>
     .status-text {
       font-weight: 600;
-      font-size: 0.82rem;
+      font-size: 0.9rem;
       white-space: nowrap;
     }
     .status-text--notworking { color: #dc2626; }      /* red */
     .status-text--clear      { color: #16a34a; }      /* green */
-    .status-text--dispatched { color: #e28d00 }      /* orange */
+    .status-text--dispatched { color: #e28d00 }       /* orange */
     .status-text--dispatched-acc { color: #ff1493; }  /* purple */
-    .status-text--pickedup-cash { color: #e28d00 }   /* orange */
+    .status-text--pickedup-cash { color: #e28d00 }    /* orange */
     .status-text--pickedup-acc  { color: #ff1493; }   /* purple */
-    .status-text--rank      { color: #009dd2 }       /* blue */
+    .status-text--rank      { color: #009dd2 }        /* blue */
     .status-text--offering  {
       color: #f9fafb;
       text-shadow: 0 0 3px rgba(0,0,0,0.9);
     }
     .status-text--busy      { color: #fbbf24; }       /* generic busy */
     .status-text--unknown   { color: #6b7280; }       /* grey */
+
     .cell-status { text-align: right; }
     @media (max-width: 640px) {
       .cell-status { text-align: left; }
@@ -38,12 +39,15 @@
       <div class="brand-box">N</div>
       <div class="header-title-wrap">
         <h1 class="header-title">Active Hackney Drivers</h1>
+        <p class="header-subtitle">
+          Live view of licensed Hackney carriages. Search by callsign, taxi plate or reg and use A+/A− to adjust text size on smaller screens.
+        </p>
       </div>
       <div class="font-buttons">
         <button id="fontSm" class="btn-ghost" title="Smaller text">A−</button>
         <button id="fontLg" class="btn-ghost" title="Larger text">A+</button>
       </div>
-      <button id="refreshBtn" class="btn-outline">Refresh</button>
+      <button id="refreshBtn" class="btn-outline" title="Refresh list and statuses">Refresh</button>
     </div>
 
     <div class="header-controls">
@@ -56,15 +60,15 @@
         </div>
 
         <select id="statusFilter" class="control-select">
-          <option value="all">Show: All</option>
+          <option value="all">Show: All drivers</option>
           <option value="online">Working only</option>
           <option value="offline">Not working only</option>
         </select>
 
         <select id="sortSelect" class="control-select">
           <option value="callsign">Sort: Callsign</option>
-          <option value="plateNumber">Sort: Plate</option>
-          <option value="registration">Sort: Registration</option>
+          <option value="plateNumber">Sort: Taxi Plate</option>
+          <option value="registration">Sort: Reg Plate</option>
         </select>
 
         <label class="control-label">Row highlight</label>
@@ -76,6 +80,24 @@
       </div>
 
       <div id="statusCounts" class="status-counts"></div>
+
+      <div class="status-legend">
+        <span class="legend-item">
+          <span class="legend-swatch legend-swatch--clear"></span>Clear / available
+        </span>
+        <span class="legend-item">
+          <span class="legend-swatch legend-swatch--dispatched"></span>Dispatched to pick up
+        </span>
+        <span class="legend-item">
+          <span class="legend-swatch legend-swatch--pickedup"></span>Passenger on board
+        </span>
+        <span class="legend-item">
+          <span class="legend-swatch legend-swatch--rank"></span>Rank job in progress
+        </span>
+        <span class="legend-item">
+          <span class="legend-swatch legend-swatch--notworking"></span>Not working / off shift
+        </span>
+      </div>
 
       <div id="colHeader" class="table-header-wrap">
         <div class="table-row table-header">
@@ -184,7 +206,7 @@
     };
 
     const rowsEl     = document.getElementById("rows");
-    const skeletonEl = document.getElementById("skeleton");
+    the skeletonEl = document.getElementById("skeleton");
     const refreshBtn = document.getElementById("refreshBtn");
     const searchEl   = document.getElementById("searchInput");
     const sortEl     = document.getElementById("sortSelect");
@@ -264,28 +286,28 @@
       const lowerLabel = label.toLowerCase();
 
       if (code === "NotWorking") {
-        return { text: "Not Working", cls: "status-text--notworking" };
+        return { text: "Not Working — Off shift", cls: "status-text--notworking" };
       }
       if (code === "Clear") {
-        return { text: "Clear", cls: "status-text--clear" };
+        return { text: "Clear — Waiting for a job", cls: "status-text--clear" };
       }
       if (code === "BusyMeterOff") {
-        return { text: "Dispatched", cls: "status-text--dispatched" };
+        return { text: "Dispatched — Heading to pick up", cls: "status-text--dispatched" };
       }
       if (code === "BusyMeterOffAccount") {
-        return { text: "Dispatched", cls: "status-text--dispatched-acc" };
+        return { text: "Dispatched — Heading to account job", cls: "status-text--dispatched-acc" };
       }
       if (code === "BusyMeterOnFromMeterOffCash") {
-        return { text: "Picked up", cls: "status-text--pickedup-cash" };
+        return { text: "Picked up — Cash job in progress", cls: "status-text--pickedup-cash" };
       }
       if (code === "BusyMeterOnFromMeterOffAccount") {
-        return { text: "Picked up", cls: "status-text--pickedup-acc" };
+        return { text: "Picked up — Account job in progress", cls: "status-text--pickedup-acc" };
       }
       if (code === "BusyMeterOnFromClear") {
-        return { text: "Rank Job", cls: "status-text--rank" };
+        return { text: "Rank Job — On hire from rank", cls: "status-text--rank" };
       }
       if (code === "JobOffered") {
-        return { text: "Offering Job", cls: "status-text--offering" };
+        return { text: "Offering Job — Awaiting driver response", cls: "status-text--offering" };
       }
 
       // infer from label (for cases where only text is sent)
@@ -297,30 +319,37 @@
           lowerLabel.includes("signed off") ||
           lowerLabel.includes("not working")
         ) {
-          return { text: "Not Working", cls: "status-text--notworking" };
+          return { text: "Not Working — Off shift", cls: "status-text--notworking" };
         }
         if (lowerLabel === "clear") {
-          return { text: "Clear", cls: "status-text--clear" };
+          return { text: "Clear — Waiting for a job", cls: "status-text--clear" };
         }
         if (lowerLabel.includes("offer")) {
-          return { text: "Offering Job", cls: "status-text--offering" };
+          return { text: "Offering Job — Awaiting driver response", cls: "status-text--offering" };
         }
         if (lowerLabel.startsWith("busy")) {
-          return { text: "Busy", cls: "status-text--busy" };
+          return { text: "Busy — On a job", cls: "status-text--busy" };
         }
       }
 
       if (!code && !label) {
-        return { text: "Not Working", cls: "status-text--notworking" };
+        return { text: "Not Working — Off shift", cls: "status-text--notworking" };
       }
 
-      const text = label || code || "Unknown";
+      const text = label || code || "Status updating…";
       return { text, cls: "status-text--unknown" };
     }
 
     function statusTextSpan(rawCode, rawLabel) {
       const mapped = mapDriverStatus(rawCode, rawLabel);
       return `<span class="status-text ${mapped.cls}">${mapped.text}</span>`;
+    }
+
+    function formatUpdated(ts) {
+      if (!ts) return "";
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     function rowChrome(on){
@@ -348,6 +377,7 @@
 
       const rowClass = rowChrome(on) + (highlight ? " row-flash" : "");
       const tooltip = ts ? ("Last update: " + new Date(ts).toLocaleString()) : "";
+      const updatedLabel = formatUpdated(ts);
 
       return `
         <div id="row-${normKey(cs)}" class="${rowClass}" title="${tooltip}">
@@ -359,7 +389,10 @@
             <span class="pill-reg mono strong">${reg}</span>
           </div>
           <div class="cell cell-status">
-            ${statusTextSpan(code, label)}
+            <div class="status-main">
+              ${statusTextSpan(code, label)}
+            </div>
+            ${updatedLabel ? `<div class="status-updated">Updated ${updatedLabel}</div>` : ""}
           </div>
         </div>
       `;
