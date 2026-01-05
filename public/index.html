@@ -19,13 +19,24 @@
     .status-text--dispatched-acc { color: #ff1493; }  /* purple */
     .status-text--pickedup-cash { color: #e28d00 }    /* orange */
     .status-text--pickedup-acc  { color: #ff1493; }   /* purple */
-    .status-text--rank      { color: #009dd2 }        /* blue */
+    .status-text--rank      { color: #009dd2; }        /* blue */
     .status-text--offering  {
       color: #f9fafb;
       text-shadow: 0 0 3px rgba(0,0,0,0.9);
     }
     .status-text--busy      { color: #fbbf24; }       /* generic busy */
     .status-text--unknown   { color: #6b7280; }       /* grey */
+
+    /* NEW: Suspended */
+    .status-text--suspended {
+      color: #dc2626;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+    }
+    .row-suspended {
+      background: rgba(220, 38, 38, 0.18) !important;
+      border-left: 4px solid #dc2626 !important;
+    }
 
     .cell-status { text-align: right; }
     @media (max-width: 640px) {
@@ -103,7 +114,7 @@
 
       <div class="status-legend">
         <span class="legend-item">
-          <span class=" "></span> 
+          <span class=" "></span>
         </span>
       </div>
 
@@ -181,6 +192,8 @@
     const getReg      = (v) => v?.registration ?? v?.vrm ?? v?.reg ?? "";
     const normKey     = (s) => String(s || "").trim().toUpperCase();
     const toNum       = (s) => { const n = Number(String(s).trim()); return Number.isFinite(n) ? n : null; };
+
+    const isSuspended = (v) => v?.isSuspended === true;
 
     const isActive = (v) => {
       if (typeof v?.isActive === "boolean") return v.isActive;
@@ -318,8 +331,18 @@
     const driverStatusLabelFor = (cs) => onlineMap.get(normKey(cs))?.driverStatusLabel || null;
     const driverStatusCodeFor  = (cs) => onlineMap.get(normKey(cs))?.driverStatusCode || null;
 
-    // Short, descriptive status labels
-    function mapDriverStatus(rawCode, rawLabel) {
+    // Online, with suspension override
+    const effectiveOnlineForVehicle = (v) => {
+      if (isSuspended(v)) return false;
+      return onlineFor(getCallsign(v));
+    };
+
+    // Short, descriptive status labels (with suspension override)
+    function mapDriverStatus(rawCode, rawLabel, vehicle) {
+      if (vehicle?.isSuspended === true) {
+        return { text: "SUSPENDED", cls: "status-text--suspended" };
+      }
+
       const code = (rawCode || "").toString().trim();
       const label = (rawLabel || "").toString().trim();
       const lowerLabel = label.toLowerCase();
@@ -388,8 +411,8 @@
       return { text, cls: "status-text--unknown" };
     }
 
-    function statusTextSpan(rawCode, rawLabel) {
-      const mapped = mapDriverStatus(rawCode, rawLabel);
+    function statusTextSpan(rawCode, rawLabel, vehicle) {
+      const mapped = mapDriverStatus(rawCode, rawLabel, vehicle);
       return `<span class="status-text ${mapped.cls}">${mapped.text}</span>`;
     }
 
@@ -400,18 +423,21 @@
       return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
-    function rowChrome(on){
+    function rowChrome(on, suspended){
+      // Suspension always overrides visuals (offline look + extra emphasis)
+      const suspendedClass = suspended ? " row-suspended" : "";
+
       if (highlightMode === "background") {
-        if (on === true)  return "row row-bg-online";
-        if (on === false) return "row row-bg-offline";
-        return "row row-bg-neutral";
+        if (on === true)  return "row row-bg-online" + suspendedClass;
+        if (on === false) return "row row-bg-offline" + suspendedClass;
+        return "row row-bg-neutral" + suspendedClass;
       }
       if (highlightMode === "border") {
-        if (on === true)  return "row row-border-online";
-        if (on === false) return "row row-border-offline";
-        return "row row-border-neutral";
+        if (on === true)  return "row row-border-online" + suspendedClass;
+        if (on === false) return "row row-border-offline" + suspendedClass;
+        return "row row-border-neutral" + suspendedClass;
       }
-      return "row";
+      return "row" + suspendedClass;
     }
 
     // Callsign → Status → Reg → Taxi Plate
@@ -419,12 +445,15 @@
       const cs   = getCallsign(v) || "";
       const plat = getPlate(v)    || "—";
       const reg  = getReg(v)      || "—";
-      const on   = onlineFor(cs);
+
+      const suspended = isSuspended(v);
+      const on   = suspended ? false : onlineFor(cs);
+
       const ts   = updatedFor(cs);
       const code = driverStatusCodeFor(cs);
       const label= driverStatusLabelFor(cs);
 
-      const rowClass = rowChrome(on) + (highlight ? " row-flash" : "");
+      const rowClass = rowChrome(on, suspended) + (highlight ? " row-flash" : "");
       const tooltip = ts ? ("Last update: " + new Date(ts).toLocaleString()) : "";
       const updatedLabel = formatUpdated(ts);
 
@@ -436,7 +465,7 @@
           <!-- Status -->
           <div class="cell cell-status">
             <div class="status-main">
-              ${statusTextSpan(code, label)}
+              ${statusTextSpan(code, label, v)}
             </div>
             ${updatedLabel ? `<div class="status-updated">Updated ${updatedLabel}</div>` : ""}
           </div>
@@ -486,9 +515,9 @@
       const filterMode = statusFilterEl.value;
       if (filterMode !== "all") {
         arr = arr.filter(v => {
-          const on = onlineFor(getCallsign(v));
-          if (filterMode === "online") return on === true;
-          if (filterMode === "offline") return on === false;
+          const on = effectiveOnlineForVehicle(v);
+          if (filterMode === "online") return on === true;   // suspended will never match
+          if (filterMode === "offline") return on === false; // includes suspended
           return true;
         });
       }
@@ -500,13 +529,15 @@
 
       master = arr;
 
-      const onlineCount  = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === true  ? 1 : 0), 0);
-      const offlineCount = arr.reduce((n, v) => n + (onlineFor(getCallsign(v)) === false ? 1 : 0), 0);
+      const suspendedCount = arr.reduce((n, v) => n + (isSuspended(v) ? 1 : 0), 0);
+      const onlineCount  = arr.reduce((n, v) => n + (effectiveOnlineForVehicle(v) === true  ? 1 : 0), 0);
+      const offlineCount = arr.reduce((n, v) => n + (effectiveOnlineForVehicle(v) === false ? 1 : 0), 0);
       const total = arr.length;
 
       statusCountsEl.innerHTML =
         '🟢 Working: <b>' + onlineCount + '</b>&nbsp;&nbsp;' +
         '🔴 Offline: <b>' + offlineCount + '</b>&nbsp;&nbsp;' +
+        '⛔ Suspended: <b>' + suspendedCount + '</b>&nbsp;&nbsp;' +
         '⚪ Total: <b>' + total + '</b>';
 
       render(changedKey);
@@ -540,6 +571,8 @@
             callsign: getCallsign(v),
             plateNumber: getPlate(v),
             registration: getReg(v),
+            // ensure boolean for safety even if upstream is odd
+            isSuspended: v?.isSuspended === true,
           };
 
           if (!(obj.callsign || obj.plateNumber || obj.registration)) continue;
@@ -615,6 +648,9 @@
               driverStatusLabel: p.driverStatus ?? prevLabel,
               driverStatusCode: p.driverStatusCode ?? prevCode,
             });
+
+            // If the row is suspended, we still re-render (status text is overridden),
+            // but we only flash highlight on actual online toggle events.
             applyFiltersAndRender(prev !== p.online ? key : null);
           } catch {}
         });
