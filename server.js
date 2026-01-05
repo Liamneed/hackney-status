@@ -628,7 +628,7 @@ app.get("/api/status", (_req, res) => {
   res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
 });
 
-// Proxy vehicles from Autocab
+// Proxy vehicles from Autocab (and ensure isSuspended is always present/boolean)
 app.get("/api/vehicles", async (_req, res) => {
   try {
     if (!AUTOCAB_KEY) {
@@ -650,6 +650,37 @@ app.get("/api/vehicles", async (_req, res) => {
     }
 
     const data = await r.json();
+
+    // ---- NEW: normalize/guarantee isSuspended boolean ----
+    // Autocab vehicles include isSuspended; we ensure it is always a boolean for frontend logic.
+    const list =
+      Array.isArray(data) ? data :
+      Array.isArray(data?.items) ? data.items :
+      Array.isArray(data?.results) ? data.results :
+      Array.isArray(data?.vehicles) ? data.vehicles :
+      Array.isArray(data?.data) ? data.data :
+      null;
+
+    if (Array.isArray(list)) {
+      const normalized = list.map(v => ({
+        ...v,
+        isSuspended: v?.isSuspended === true,
+      }));
+
+      if (Array.isArray(data)) {
+        return res.json(normalized);
+      }
+
+      // preserve original envelope shape
+      if (Array.isArray(data?.items))    return res.json({ ...data, items: normalized });
+      if (Array.isArray(data?.results))  return res.json({ ...data, results: normalized });
+      if (Array.isArray(data?.vehicles)) return res.json({ ...data, vehicles: normalized });
+      if (Array.isArray(data?.data))     return res.json({ ...data, data: normalized });
+
+      return res.json({ ...data, items: normalized });
+    }
+
+    // if upstream shape is unknown, just passthrough
     res.json(data);
   } catch (e) {
     console.error("/api/vehicles error:", e);
