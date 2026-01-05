@@ -49,11 +49,8 @@ function debugLog(label, payload) {
   console.log(`\n===== ${label} @ ${new Date().toISOString()} =====`);
   try {
     const str = JSON.stringify(payload, null, 2);
-    if (str.length > 5000) {
-      console.log(str.substring(0, 5000) + " ... [TRUNCATED]");
-    } else {
-      console.log(str);
-    }
+    if (str.length > 5000) console.log(str.substring(0, 5000) + " ... [TRUNCATED]");
+    else console.log(str);
   } catch (err) {
     console.log("Could not stringify payload:", err.message);
     console.log(payload);
@@ -104,21 +101,11 @@ function isNewerTimestamp(incomingIso, existingIso) {
 }
 
 // ---------- ONLINE LOGIC ----------
-//
-// Rules:
-// - If status code/label maps to "Not Working" / off shift → ALWAYS offline.
-// - Otherwise, driver is only "online" if explicitOnline === true
-// - And we require a recent heartbeat (lastPingAt OR updatedAt) within timeout.
-//
 function computeOnline(rec) {
   if (!rec) return false;
 
   const code = rec.driverStatusCode || "";
-  const statusLower = (
-    rec.driverStatusLabel ||
-    rec.driverStatus ||
-    ""
-  ).toString().toLowerCase();
+  const statusLower = (rec.driverStatusLabel || rec.driverStatus || "").toString().toLowerCase();
 
   // Hard offline states
   if (
@@ -134,7 +121,7 @@ function computeOnline(rec) {
     return false;
   }
 
-  // Must have an explicit "online" flag from Status / ShiftChange / HackneyLocation
+  // Must be explicitly online
   if (rec.explicitOnline !== true) return false;
 
   // Heartbeat: lastPingAt OR updatedAt
@@ -148,6 +135,29 @@ function computeOnline(rec) {
   if (age > OFFLINE_TIMEOUT_MS) return false;
 
   return true;
+}
+
+// Build a payload for API/SSE that is consistent with frontend "onlineFor()":
+// If computeOnline(rec) is false, we force the payload status to OFFLINE/NotWorking
+// (without mutating the stored record).
+function statusPayload(callsign, rec) {
+  const online = computeOnline(rec);
+
+  let driverStatus = rec?.driverStatus || rec?.driverStatusLabel || null;
+  let driverStatusCode = rec?.driverStatusCode || null;
+
+  if (!online) {
+    driverStatus = "OFFLINE";
+    driverStatusCode = "NotWorking";
+  }
+
+  return {
+    callsign,
+    online,
+    updatedAt: rec?.updatedAt || null,
+    driverStatus,
+    driverStatusCode,
+  };
 }
 
 // ---------- Common helpers ----------
@@ -192,28 +202,17 @@ function vehicleStatusLabel(raw) {
 
   if (raw === "Clear") return "Clear";
 
-  if (raw === "BusyMeterOff" || raw === "BusyMeterOffAccount") {
-    return "Dispatched";
-  }
-  if (raw === "BusyMeterOnFromMeterOffCash" || raw === "BusyMeterOnFromMeterOffAccount") {
-    return "Picked up";
-  }
-  if (raw === "BusyMeterOnFromClear") {
-    return "Street Booking";
-  }
-  if (raw === "JobOffered") {
-    return "Offering Job";
-  }
+  if (raw === "BusyMeterOff" || raw === "BusyMeterOffAccount") return "Dispatched";
+  if (raw === "BusyMeterOnFromMeterOffCash" || raw === "BusyMeterOnFromMeterOffAccount") return "Picked up";
+  if (raw === "BusyMeterOnFromClear") return "Street Booking";
+  if (raw === "JobOffered") return "Offering Job";
 
   const lower = s.toLowerCase();
-  if (lower.startsWith("busy")) {
-    return "Busy";
-  }
+  if (lower.startsWith("busy")) return "Busy";
 
   return s; // fallback
 }
 
-// Simple label for shift change driverStatus
 function shiftStatusLabel(rawStatus, eventType, subType, item) {
   const s   = (rawStatus || "").toString().toLowerCase();
   const evt = (eventType || "").toString().toLowerCase();
@@ -238,9 +237,7 @@ function shiftStatusLabel(rawStatus, eventType, subType, item) {
     s.includes("signed on") ||
     evt.includes("shiftstart") ||
     sub === "started"
-  ) {
-    return "On Shift";
-  }
+  ) return "On Shift";
 
   if (
     s.includes("end") ||
@@ -251,9 +248,7 @@ function shiftStatusLabel(rawStatus, eventType, subType, item) {
     (s.includes("off") && !s.includes("offline status ignored")) ||
     evt.includes("shiftend") ||
     sub === "ended"
-  ) {
-    return "Off Shift";
-  }
+  ) return "Off Shift";
 
   if (rawStatus) return String(rawStatus);
   if (evt)       return `Shift: ${eventType}`;
@@ -261,7 +256,6 @@ function shiftStatusLabel(rawStatus, eventType, subType, item) {
   return null;
 }
 
-// Infer explicit online/offline from ShiftChange strings + flags
 function inferExplicitOnlineFromShift(rawStatus, eventType, subType, item) {
   const s   = (rawStatus || "").toString().toLowerCase();
   const evt = (eventType || "").toString().toLowerCase();
@@ -307,13 +301,7 @@ app.get("/api/status/stream", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  const snapshot = Array.from(onlineMap.entries()).map(([k, v]) => ({
-    callsign: k,
-    online: computeOnline(v),
-    updatedAt: v.updatedAt || null,
-    driverStatus: v.driverStatus || v.driverStatusLabel || null,
-    driverStatusCode: v.driverStatusCode || null,
-  }));
+  const snapshot = Array.from(onlineMap.entries()).map(([k, v]) => statusPayload(k, v));
   res.write(`event: snapshot\ndata:${JSON.stringify({ data: snapshot })}\n\n`);
 
   sseClients.add(res);
@@ -328,13 +316,7 @@ setInterval(() => {
 }, HEARTBEAT_MS);
 
 function broadcastStatus(callsign, rec) {
-  const payload = {
-    callsign,
-    online: computeOnline(rec),
-    updatedAt: rec.updatedAt || null,
-    driverStatus: rec.driverStatus || rec.driverStatusLabel || null,
-    driverStatusCode: rec.driverStatusCode || null,
-  };
+  const payload = statusPayload(callsign, rec);
   const msg = `event: status\ndata:${JSON.stringify(payload)}\n\n`;
   for (const res of sseClients) {
     try { res.write(msg); } catch {}
@@ -342,9 +324,7 @@ function broadcastStatus(callsign, rec) {
 }
 
 /**
- * NEW: Timeout sweeper
- * Some vehicles can appear "working" if their last update was hours ago.
- * We periodically recompute online state and broadcast transitions caused by time passing.
+ * Timeout sweeper: broadcasts transitions caused by time passing
  */
 const TIMEOUT_SWEEP_MS = Number(process.env.TIMEOUT_SWEEP_MS || 30000);
 let lastOnlineState = new Map(); // callsign -> boolean
@@ -399,18 +379,12 @@ app.post("/webhook/HackneyLocation", (req, res) => {
 
       const existing = onlineMap.get(key) || {};
 
-      // 🔑 Only update if this ping is newer than what we already have
-      if (!isNewerTimestamp(ts, existing.updatedAt || existing.lastPingAt || null)) {
-        continue;
-      }
+      // Only update if newer
+      if (!isNewerTimestamp(ts, existing.updatedAt || existing.lastPingAt || null)) continue;
 
-      // NEW LOGIC:
-      // - If we already know they are explicitly OFF (false), keep them off.
-      // - Otherwise (undefined/null/true), treat a location ping as "working / online".
+      // If explicitly OFF, keep OFF. Else treat ping as online.
       let explicitOnline = existing.explicitOnline;
-      if (explicitOnline === undefined || explicitOnline === null) {
-        explicitOnline = true;
-      }
+      if (explicitOnline === undefined || explicitOnline === null) explicitOnline = true;
 
       const rec = {
         ...existing,
@@ -442,9 +416,7 @@ app.post("/webhook/Status", (req, res) => {
     debugLog("WEBHOOK HIT: Status / VehicleTracks", req.body);
 
     const body = req.body || {};
-    const tracks = Array.isArray(body.VehicleTracks)
-      ? body.VehicleTracks
-      : coercePayloadToArray(body);
+    const tracks = Array.isArray(body.VehicleTracks) ? body.VehicleTracks : coercePayloadToArray(body);
 
     let updates = 0;
 
@@ -462,29 +434,23 @@ app.post("/webhook/Status", (req, res) => {
       if (!cs) continue;
 
       const key = normKey(cs);
-      const ts  =
-        track.Timestamp ||
-        track.timestamp ||
-        track.time ||
-        new Date().toISOString();
+      const ts  = track.Timestamp || track.timestamp || track.time || new Date().toISOString();
 
       const rawCode = track.VehicleStatus || track.vehicleStatus || null;
       const label   = vehicleStatusLabel(rawCode);
 
       const existing = onlineMap.get(key) || {};
 
-      // 🔑 Only update if this status is newer than what we already have
-      if (!isNewerTimestamp(ts, existing.updatedAt || null)) {
-        continue;
-      }
+      // Only update if newer
+      if (!isNewerTimestamp(ts, existing.updatedAt || null)) continue;
 
       const rec = {
         ...existing,
-        lastPingAt: ts, // NEW: status update is a heartbeat
+        lastPingAt: ts,            // IMPORTANT: status update counts as heartbeat
         updatedAt: ts,
         driverStatusCode: rawCode || existing.driverStatusCode || null,
         driverStatusLabel: label ?? existing.driverStatusLabel ?? rawCode ?? null,
-        explicitOnline: true, // tracking → definitely on/working
+        explicitOnline: true,      // tracking → definitely on/working
       };
       rec.driverStatus = rec.driverStatusLabel;
 
@@ -556,30 +522,17 @@ app.post("/webhook/ShiftChange", (req, res) => {
 
       if (explicit === null && label) {
         const l = label.toLowerCase();
-        if (
-          l.includes("off shift") ||
-          l.includes("off duty") ||
-          l.includes("logged off") ||
-          l.includes("signed off")
-        ) {
+        if (l.includes("off shift") || l.includes("off duty") || l.includes("logged off") || l.includes("signed off")) {
           explicit = false;
-        } else if (
-          l.includes("on shift") ||
-          l.includes("on duty") ||
-          l.includes("logged on") ||
-          l.includes("logged in") ||
-          l.includes("signed on")
-        ) {
+        } else if (l.includes("on shift") || l.includes("on duty") || l.includes("logged on") || l.includes("logged in") || l.includes("signed on")) {
           explicit = true;
         }
       }
 
       const existing = onlineMap.get(key) || {};
 
-      // 🔑 Only update if this shift change is newer than what we already have
-      if (!isNewerTimestamp(ts, existing.updatedAt || null)) {
-        continue;
-      }
+      // Only update if newer
+      if (!isNewerTimestamp(ts, existing.updatedAt || null)) continue;
 
       let rec = {
         ...existing,
@@ -648,13 +601,7 @@ app.get("/debug/last-shiftchange", (_req, res) => {
 
 // ---------- Public API ----------
 app.get("/api/status", (_req, res) => {
-  const arr = Array.from(onlineMap.entries()).map(([k, v]) => ({
-    callsign: k,
-    online: computeOnline(v),
-    updatedAt: v.updatedAt || null,
-    driverStatus: v.driverStatus || v.driverStatusLabel || null,
-    driverStatusCode: v.driverStatusCode || null,
-  }));
+  const arr = Array.from(onlineMap.entries()).map(([k, v]) => statusPayload(k, v));
   res.json({ data: arr, count: arr.length, ts: new Date().toISOString() });
 });
 
@@ -681,7 +628,6 @@ app.get("/api/vehicles", async (_req, res) => {
 
     const data = await r.json();
 
-    // ---- NEW: normalize/guarantee isSuspended boolean ----
     const list =
       Array.isArray(data) ? data :
       Array.isArray(data?.items) ? data.items :
@@ -696,11 +642,8 @@ app.get("/api/vehicles", async (_req, res) => {
         isSuspended: v?.isSuspended === true,
       }));
 
-      if (Array.isArray(data)) {
-        return res.json(normalized);
-      }
+      if (Array.isArray(data)) return res.json(normalized);
 
-      // preserve original envelope shape
       if (Array.isArray(data?.items))    return res.json({ ...data, items: normalized });
       if (Array.isArray(data?.results))  return res.json({ ...data, results: normalized });
       if (Array.isArray(data?.vehicles)) return res.json({ ...data, vehicles: normalized });
@@ -709,7 +652,6 @@ app.get("/api/vehicles", async (_req, res) => {
       return res.json({ ...data, items: normalized });
     }
 
-    // if upstream shape is unknown, just passthrough
     res.json(data);
   } catch (e) {
     console.error("/api/vehicles error:", e);
@@ -720,9 +662,7 @@ app.get("/api/vehicles", async (_req, res) => {
 // ---------- Health & root ----------
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) =>
-  res.sendFile(path.join(__dirname, "public", "index.html"))
-);
+app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 process.on("SIGTERM", () => {
   try { saveStatusToDisk(); } finally { process.exit(0); }
