@@ -108,7 +108,7 @@ function isNewerTimestamp(incomingIso, existingIso) {
 // Rules:
 // - If status code/label maps to "Not Working" / off shift → ALWAYS offline.
 // - Otherwise, driver is only "online" if explicitOnline === true
-//   AND (optional) lastPingAt is recent.
+// - And we require a recent heartbeat (lastPingAt OR updatedAt) within timeout.
 //
 function computeOnline(rec) {
   if (!rec) return false;
@@ -120,6 +120,7 @@ function computeOnline(rec) {
     ""
   ).toString().toLowerCase();
 
+  // Hard offline states
   if (
     code === "NotWorking" ||
     statusLower.includes("not working") ||
@@ -133,17 +134,18 @@ function computeOnline(rec) {
     return false;
   }
 
-  // must have an explicit "online" flag from Status / ShiftChange / HackneyLocation
+  // Must have an explicit "online" flag from Status / ShiftChange / HackneyLocation
   if (rec.explicitOnline !== true) return false;
 
-  // Optional timeout for stale pings
-  if (rec.lastPingAt) {
-    const t = new Date(rec.lastPingAt).getTime();
-    if (Number.isFinite(t)) {
-      const age = Date.now() - t;
-      if (age > OFFLINE_TIMEOUT_MS) return false;
-    }
-  }
+  // Heartbeat: lastPingAt OR updatedAt
+  const heartbeatIso = rec.lastPingAt || rec.updatedAt || null;
+  if (!heartbeatIso) return false;
+
+  const t = Date.parse(heartbeatIso);
+  if (!Number.isFinite(t)) return false;
+
+  const age = Date.now() - t;
+  if (age > OFFLINE_TIMEOUT_MS) return false;
 
   return true;
 }
@@ -339,6 +341,31 @@ function broadcastStatus(callsign, rec) {
   }
 }
 
+/**
+ * NEW: Timeout sweeper
+ * Some vehicles can appear "working" if their last update was hours ago.
+ * We periodically recompute online state and broadcast transitions caused by time passing.
+ */
+const TIMEOUT_SWEEP_MS = Number(process.env.TIMEOUT_SWEEP_MS || 30000);
+let lastOnlineState = new Map(); // callsign -> boolean
+
+setInterval(() => {
+  for (const [cs, rec] of onlineMap.entries()) {
+    const nowOnline = computeOnline(rec);
+    const prevOnline = lastOnlineState.get(cs);
+
+    if (prevOnline === undefined) {
+      lastOnlineState.set(cs, nowOnline);
+      continue;
+    }
+
+    if (prevOnline !== nowOnline) {
+      lastOnlineState.set(cs, nowOnline);
+      broadcastStatus(cs, rec);
+    }
+  }
+}, TIMEOUT_SWEEP_MS);
+
 // ---------- Webhook auth ----------
 function checkWebhookAuth(req, res) {
   if (!WEBHOOK_TOKEN) return true;
@@ -393,6 +420,7 @@ app.post("/webhook/HackneyLocation", (req, res) => {
       };
 
       onlineMap.set(key, rec);
+      lastOnlineState.set(key, computeOnline(rec));
       updates++;
       broadcastStatus(key, rec);
     }
@@ -452,7 +480,7 @@ app.post("/webhook/Status", (req, res) => {
 
       const rec = {
         ...existing,
-        lastPingAt: existing.lastPingAt || ts, // keep old ping if newer comes from location
+        lastPingAt: ts, // NEW: status update is a heartbeat
         updatedAt: ts,
         driverStatusCode: rawCode || existing.driverStatusCode || null,
         driverStatusLabel: label ?? existing.driverStatusLabel ?? rawCode ?? null,
@@ -461,6 +489,7 @@ app.post("/webhook/Status", (req, res) => {
       rec.driverStatus = rec.driverStatusLabel;
 
       onlineMap.set(key, rec);
+      lastOnlineState.set(key, computeOnline(rec));
       updates++;
       broadcastStatus(key, rec);
     }
@@ -571,6 +600,7 @@ app.post("/webhook/ShiftChange", (req, res) => {
       }
 
       onlineMap.set(key, rec);
+      lastOnlineState.set(key, computeOnline(rec));
       updates++;
       broadcastStatus(key, rec);
 
@@ -652,7 +682,6 @@ app.get("/api/vehicles", async (_req, res) => {
     const data = await r.json();
 
     // ---- NEW: normalize/guarantee isSuspended boolean ----
-    // Autocab vehicles include isSuspended; we ensure it is always a boolean for frontend logic.
     const list =
       Array.isArray(data) ? data :
       Array.isArray(data?.items) ? data.items :
